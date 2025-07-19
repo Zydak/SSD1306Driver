@@ -5,6 +5,7 @@
 
 #include <vector>
 #include <array>
+#include <string>
 
 class SSD1306Driver
 {
@@ -69,23 +70,30 @@ public:
     esp_err_t WritePageToRam(uint8_t page);
     esp_err_t WriteAllPagesToRam();
 
-    esp_err_t WriteToPage(uint8_t page, void* data, uint8_t size, uint8_t offset);
+    esp_err_t WriteToPage(uint8_t page, const void* data, uint8_t size, uint8_t offset);
+    esp_err_t WriteToColumn(uint8_t page, uint8_t column, uint8_t data, bool overwrite);
+
+    esp_err_t WriteText(uint8_t x, uint8_t y, std::string text, bool invert);
 private:
 
     class Pages
     {
     public:
         const uint8_t* GetPagePtr(uint8_t page);
-        esp_err_t WritePage(uint8_t page, void* data, uint8_t size, uint8_t offset);
+        esp_err_t WritePage(uint8_t page, const void* data, uint8_t size, uint8_t offset);
+        esp_err_t WriteColumn(uint8_t page, uint8_t column, uint8_t data, bool overwrite);
 
         bool HasPageChanged(uint8_t page);
         void PageSentToRam(uint8_t page);
     private:
         #define PAGES_COUNT 8
+
+        // 129 because the first byte in each page is 0x40 (control data byte) and the rest 128 are columns
+        // This allows to send the data through the I2C without any copying and "stitching" the control byte
         #define PAGE_SIZE 129
 
         // Store everything in a single continous buffer so it's more memory effiecient
-        std::array<uint8_t, PAGE_SIZE * PAGES_COUNT> Buffer; // 129 because the first byte in each page is 0x40 (control data byte) and the rest 128 are columns
+        std::array<uint8_t, PAGE_SIZE * PAGES_COUNT> Buffer;
         uint8_t HavePagesChanged = 0; // Bit field
     };
 
