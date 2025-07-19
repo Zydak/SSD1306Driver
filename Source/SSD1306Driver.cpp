@@ -142,6 +142,24 @@ static const uint8_t s_ASCIIPixelData[128][8] = {
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // 127 -> 0x7F (DEL)
 };
 
+#define ESP_ERROR_PROPAGATE(result, ...)\
+    if (result != ESP_OK){\
+        return result;\
+    }
+
+/**
+ * @brief Initializes the SSD1306Driver object and configures the SSD1306 OLED display.
+ *
+ * @param configuration  Reference to a SSD1306DriverConfiguration struct containing:
+ *   - I2CPort: I2C port number to use for communication.
+ *   - SclIO: GPIO number for the I2C SCL line.
+ *   - SdaIO: GPIO number for the I2C SDA line.
+ *   - I2CSclSpeedHz: I2C clock speed in Hz.
+ *   - InvertColors: If true, the display will be initialized in inverted color mode (white-on-black).
+ *   - FlipRendering: If true, the display will be initialized with flipped orientation (mirrored horizontally/vertically).
+ *
+ * @return None (constructor)
+ */
 SSD1306Driver::SSD1306Driver(const SSD1306DriverConfiguration &configuration)
 {
     i2c_master_bus_config_t busConfig = {};
@@ -154,67 +172,103 @@ SSD1306Driver::SSD1306Driver(const SSD1306DriverConfiguration &configuration)
 
     ESP_ERROR_CHECK(i2c_new_master_bus(&busConfig, &m_I2CBusHandle));
     ESP_ERROR_CHECK(i2c_master_probe(m_I2CBusHandle, 0x3C, 5000 / portTICK_PERIOD_MS));
-    i2c_device_config_t I2CDeviceConfig = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = 0x3C,
-        .scl_speed_hz = configuration.I2CSclSpeedHz
-    };
+    i2c_device_config_t I2CDeviceConfig{};
+    I2CDeviceConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    I2CDeviceConfig.device_address = 0x3C;
+    I2CDeviceConfig.scl_speed_hz = configuration.I2CSclSpeedHz;
     ESP_ERROR_CHECK(i2c_master_bus_add_device(m_I2CBusHandle, &I2CDeviceConfig, &m_I2CHandle));
 
     m_CommandBuffer.reserve(256);
 
-    // Reset SSD1306 RAM
-    std::array<uint8_t, 128> nullData;
-    nullData.fill(0);
-    for (int i = 0; i < PAGES_COUNT; i++)
-    {
-        m_Pages.WritePage(i, nullData.data(), 128, 0);
-    }
-    WriteAllPagesToRam();
+    ClearDisplay();
 
     // Reset Everything according to data sheet command table https://cdn-shop.adafruit.com/datasheets/SSD1306.pdf
     AppendControlByteCommand();
-    AppendSetDisplayOnOff(false);
-    AppendSetContrastControl(0x7F);
-    AppendEntireDisplayOn(false);
-    AppendSetNormalInverseDisplay(configuration.InvertColors);
-    AppendDeactivateScroll();
-    AppendSetLowerColumnStartAddress(0);
-    AppendSetHigherColumnStartAddress(0);
-    AppendSetMemoryAddressingMode(0b10);
-    AppendSetPageStartAddress(0);
-    AppendSetDisplayStartLine(0);
-    AppendSetSegmentRemap(configuration.FlipRendering);
-    AppendSetMultiplexRatio(0b00111111);
-    AppendSetComOutputScanDirection(configuration.FlipRendering);
-    AppendSetDisplayOffset(0);
-    AppendSetComPins(true, false);
-    AppendSetDisplayClockDivideRatioAndOscillatorFrequency(0b0000, 0b1000);
-    AppendSetPreChargePeriod(0x2, 0x2);
-    AppendSetVComHDeselectLevel(0b010);
-    AppendSetDisplayOnOff(true);
+    ESP_ERROR_CHECK(AppendSetDisplayOnOff(false));
+    ESP_ERROR_CHECK(AppendSetContrastControl(0x7F));
+    ESP_ERROR_CHECK(AppendEntireDisplayOn(false));
+    ESP_ERROR_CHECK(AppendSetNormalInverseDisplay(configuration.InvertColors));
+    ESP_ERROR_CHECK(AppendDeactivateScroll());
+    ESP_ERROR_CHECK(AppendSetLowerColumnStartAddress(0));
+    ESP_ERROR_CHECK(AppendSetHigherColumnStartAddress(0));
+    ESP_ERROR_CHECK(AppendSetMemoryAddressingMode(0b10));
+    ESP_ERROR_CHECK(AppendSetPageStartAddress(0));
+    ESP_ERROR_CHECK(AppendSetDisplayStartLine(0));
+    ESP_ERROR_CHECK(AppendSetSegmentRemap(configuration.FlipRendering));
+    ESP_ERROR_CHECK(AppendSetMultiplexRatio(0b00111111));
+    ESP_ERROR_CHECK(AppendSetComOutputScanDirection(configuration.FlipRendering));
+    ESP_ERROR_CHECK(AppendSetDisplayOffset(0));
+    ESP_ERROR_CHECK(AppendSetComPins(true, false));
+    ESP_ERROR_CHECK(AppendSetDisplayClockDivideRatioAndOscillatorFrequency(0b0000, 0b1000));
+    ESP_ERROR_CHECK(AppendSetPreChargePeriod(0x2, 0x2));
+    ESP_ERROR_CHECK(AppendSetVComHDeselectLevel(0b010));
+    ESP_ERROR_CHECK(AppendChargePumpSetting(true));
+    ESP_ERROR_CHECK(AppendSetDisplayOnOff(true));
 
-    FlushCommandBuffer();
+    ESP_ERROR_CHECK(FlushCommandBuffer());
 }
 
+/**
+ * @brief Sends all queued commands in the command buffer to the SSD1306 display via I2C.
+ *
+ * @param None
+ * @return esp_err_t ESP_OK on success, or an error code from the I2C driver on failure.
+ */
 esp_err_t SSD1306Driver::FlushCommandBuffer()
 {
+    if (m_CommandBuffer.empty()) {
+        return ESP_OK;
+    }
+
     esp_err_t ret = i2c_master_transmit(m_I2CHandle, m_CommandBuffer.data(), m_CommandBuffer.size(), 1000 / portTICK_PERIOD_MS);
     m_CommandBuffer.clear();
 
     return ret;
 }
 
+/**
+ * @brief Append a control byte indicating a command to the command buffer.
+ *
+ * Adds the control byte (0x00) to the command buffer to signal that following bytes are commands.
+ */
 void SSD1306Driver::AppendControlByteCommand()
 {
     m_CommandBuffer.emplace_back(0x00);
 }
 
+/**
+ * @brief Append a control byte indicating data to the command buffer.
+ *
+ * Adds the control byte (0x40) to the command buffer to signal that following bytes are data.
+ */
 void SSD1306Driver::AppendControlByteData()
 {
     m_CommandBuffer.emplace_back(0x40);
 }
 
+/**
+ * @brief Append the charge pump setting command to the command buffer.
+ *
+ * Configures the internal charge pump of the SSD1306 display.
+ *
+ * @param enable            If true, enables the charge pump; otherwise disables it.
+ * @return ESP_OK on success.
+ */
+esp_err_t SSD1306Driver::AppendChargePumpSetting(bool enable)
+{
+    m_CommandBuffer.emplace_back(0x8D);
+    m_CommandBuffer.emplace_back(0b00010000 | (enable << 2));
+    return ESP_OK;
+}
+
+/**
+ * @brief Append the contrast control command to the command buffer.
+ *
+ * Sets the display contrast to the specified value.
+ *
+ * @param contrast          Contrast value (0-255).
+ * @return ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendSetContrastControl(uint8_t contrast)
 {
     m_CommandBuffer.emplace_back(0x81);
@@ -222,24 +276,59 @@ esp_err_t SSD1306Driver::AppendSetContrastControl(uint8_t contrast)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the entire display ON command to the command buffer.
+ *
+ * Forces all pixels on or resumes display from RAM.
+ *
+ * @param on                If true, turns all pixels on; otherwise resumes from RAM.
+ * @return ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendEntireDisplayOn(bool on)
 {
     m_CommandBuffer.emplace_back(0b10100100 | on);
     return ESP_OK;
 }
 
+/**
+ * @brief Append the normal/inverse display command to the command buffer.
+ *
+ * Sets the display to normal or inverse mode.
+ *
+ * @param invert            If true, sets inverse display; otherwise normal display.
+ * @return ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendSetNormalInverseDisplay(bool invert)
 {
     m_CommandBuffer.emplace_back(0b10100110 | invert);
     return ESP_OK;
 }
 
+/**
+ * @brief Append the display ON/OFF command to the command buffer.
+ *
+ * Turns the display on or off.
+ *
+ * @param on                If true, turns the display on; otherwise off.
+ * @return ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendSetDisplayOnOff(bool on)
 {
     m_CommandBuffer.emplace_back(0b10101110 | on);
     return ESP_OK;
 }
 
+/**
+ * @brief Append a continuous horizontal scroll setup command to the command buffer.
+ *
+ * Configures horizontal scrolling parameters for the display.
+ *
+ * @param leftHorizontalScroll  If true, scrolls left; otherwise right.
+ * @param startPageAddress      Start page address (0-7).
+ * @param timeInterval          Time interval between scroll steps (0-7).
+ * @param endPageAddress        End page address (0-7).
+ * @return ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::AppendContinuousHorizontalScrollSetup(bool leftHorizontalScroll, uint8_t startPageAddress, uint8_t timeInterval, uint8_t endPageAddress)
 {
     if (startPageAddress >= 8)
@@ -268,7 +357,18 @@ esp_err_t SSD1306Driver::AppendContinuousHorizontalScrollSetup(bool leftHorizont
 
     return ESP_OK;
 }
-
+/**
+ * @brief Append a continuous vertical and horizontal scroll setup command to the command buffer.
+ *
+ * Configures combined vertical and horizontal scrolling.
+ *
+ * @param direction             Scroll direction (0-3).
+ * @param startPageAddress      Start page address (0-7).
+ * @param timeInterval          Time interval between scroll steps (0-7).
+ * @param endPageAddress        End page address (0-7).
+ * @param verticalScrollingOffset Vertical scroll offset (0-63).
+ * @return ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::AppendContinuousVerticalAndHorizontalScrollSetup(uint8_t direction, uint8_t startPageAddress, uint8_t timeInterval, uint8_t endPageAddress, uint8_t verticalScrollingOffset)
 {
     if (direction >= 4)
@@ -307,6 +407,13 @@ esp_err_t SSD1306Driver::AppendContinuousVerticalAndHorizontalScrollSetup(uint8_
     return ESP_OK;
 }
 
+/**
+ * @brief Append the deactivate scroll command to the command buffer.
+ *
+ * Disables any active scrolling on the display.
+ *
+ * @return ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendDeactivateScroll()
 {
     m_CommandBuffer.emplace_back(0b00101110);
@@ -314,6 +421,13 @@ esp_err_t SSD1306Driver::AppendDeactivateScroll()
     return ESP_OK;
 }
 
+/**
+ * @brief Append the activate scroll command to the command buffer.
+ *
+ * Enables scrolling as previously configured.
+ *
+ * @return ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendActivateScroll()
 {
     m_CommandBuffer.emplace_back(0b00101111);
@@ -321,6 +435,15 @@ esp_err_t SSD1306Driver::AppendActivateScroll()
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set vertical scroll area command to the command buffer.
+ *
+ * Defines the number of fixed and scrollable rows for vertical scrolling.
+ *
+ * @param numberOfRowsFixed     Number of fixed rows (0-63).
+ * @param numberOfRowsScroll    Number of scrollable rows (0-127).
+ * @return ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetVerticalScrollArea(uint8_t numberOfRowsFixed, uint8_t numberOfRowsScroll)
 {
     if (numberOfRowsFixed >= 64)
@@ -341,6 +464,14 @@ esp_err_t SSD1306Driver::AppendSetVerticalScrollArea(uint8_t numberOfRowsFixed, 
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set lower column start address command to the command buffer.
+ *
+ * Sets the lower nibble of the column start address for page addressing mode.
+ *
+ * @param addressLow            Lower 4 bits of column address (0-15).
+ * @return ESP_OK on success, ESP_FAIL if parameter is out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetLowerColumnStartAddress(uint8_t addressLow)
 {
     if (addressLow >= 16)
@@ -354,6 +485,14 @@ esp_err_t SSD1306Driver::AppendSetLowerColumnStartAddress(uint8_t addressLow)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set higher column start address command to the command buffer.
+ *
+ * Sets the higher nibble of the column start address for page addressing mode.
+ *
+ * @param addressHigh           Higher 4 bits of column address (0-15).
+ * @return ESP_OK on success, ESP_FAIL if parameter is out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetHigherColumnStartAddress(uint8_t addressHigh)
 {
     if (addressHigh >= 16)
@@ -362,11 +501,23 @@ esp_err_t SSD1306Driver::AppendSetHigherColumnStartAddress(uint8_t addressHigh)
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b00000000 | addressHigh);
+    m_CommandBuffer.emplace_back(0b00010000 | addressHigh);
 
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set memory addressing mode command to the command buffer.
+ *
+ * Sets the addressing mode for the display RAM. This determines how the RAM pointer increments after each data write.
+ *
+ * @param mode  Addressing mode value:
+ *                0: Horizontal Addressing Mode (after each byte, column increments, then page increments)
+ *                1: Vertical Addressing Mode (after each byte, page increments, then column increments)
+ *                2: Page Addressing Mode (default/reset; after each byte, column increments, page does not change)
+ *                3: Invalid (do not use)
+ * @return ESP_OK on success, ESP_FAIL if parameter is out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetMemoryAddressingMode(uint8_t mode)
 {
     if (mode >= 4)
@@ -381,6 +532,16 @@ esp_err_t SSD1306Driver::AppendSetMemoryAddressingMode(uint8_t mode)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set column address command to the command buffer.
+ *
+ * Sets the start and end column addresses for horizontal or vertical addressing mode.
+ *
+ * @param startAddress  Start column address (0-127). Sets the first column to be accessed.
+ * @param endAddress    End column address (0-127). Sets the last column to be accessed.
+ *                      (RESET: start=0, end=127)
+ * @return ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetColumnAddress(uint8_t startAddress, uint8_t endAddress)
 {
     if (startAddress >= 128)
@@ -401,6 +562,16 @@ esp_err_t SSD1306Driver::AppendSetColumnAddress(uint8_t startAddress, uint8_t en
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set page address command to the command buffer.
+ *
+ * Sets the start and end page addresses for horizontal or vertical addressing mode.
+ *
+ * @param startAddress  Start page address (0-7). Sets the first page to be accessed.
+ * @param endAddress    End page address (0-7). Sets the last page to be accessed.
+ *                      (RESET: start=0, end=7)
+ * @return ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetPageAddress(uint8_t startAddress, uint8_t endAddress)
 {
     if (startAddress >= 8)
@@ -421,6 +592,14 @@ esp_err_t SSD1306Driver::AppendSetPageAddress(uint8_t startAddress, uint8_t endA
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set page start address command to the command buffer.
+ *
+ * Sets the GDDRAM page start address (for Page Addressing Mode only).
+ *
+ * @param address  Page start address (0-7). Each value selects PAGE0 to PAGE7.
+ * @return ESP_OK on success, ESP_FAIL if parameter is out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetPageStartAddress(uint8_t address)
 {
     if (address >= 8)
@@ -434,6 +613,14 @@ esp_err_t SSD1306Driver::AppendSetPageStartAddress(uint8_t address)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set display start line command to the command buffer.
+ *
+ * Sets the display RAM line mapped to the display start line.
+ *
+ * @param line                  Start line (0-63).
+ * @return ESP_OK on success, ESP_FAIL if parameter is out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetDisplayStartLine(uint8_t line)
 {
     if (line >= 64)
@@ -447,6 +634,15 @@ esp_err_t SSD1306Driver::AppendSetDisplayStartLine(uint8_t line)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set segment remap command to the command buffer.
+ *
+ * Configures the mapping between display data column address and segment driver.
+ *
+ * @param remapLeftToRight  If false (0), column address 0 is mapped to SEG0 (default).
+ *                          If true (1), column address 127 is mapped to SEG0 (display is mirrored horizontally).
+ * @return ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendSetSegmentRemap(bool remapLeftToRight)
 {
     m_CommandBuffer.emplace_back(0b10100000 | remapLeftToRight);
@@ -454,6 +650,15 @@ esp_err_t SSD1306Driver::AppendSetSegmentRemap(bool remapLeftToRight)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set multiplex ratio command to the command buffer.
+ *
+ * Sets the multiplex ratio for the display height.
+ *
+ * @param ratio  Multiplex ratio (15-63). The number of active COM lines is ratio+1.
+ *               For a 64-row display, use 63 (default/reset).
+ * @return ESP_OK on success, ESP_FAIL if parameter is out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetMultiplexRatio(uint8_t ratio)
 {
     if (ratio >= 64 || ratio <= 14)
@@ -468,6 +673,15 @@ esp_err_t SSD1306Driver::AppendSetMultiplexRatio(uint8_t ratio)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set COM output scan direction command to the command buffer.
+ *
+ * Sets the scan direction for the COM outputs (vertical flip).
+ *
+ * @param remapTopToBottom  If false (0), scan from COM0 to COM[N-1] (normal, default).
+ *                          If true (1), scan from COM[N-1] to COM0 (vertical flip).
+ * @return ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendSetComOutputScanDirection(bool remapTopToBottom)
 {
     m_CommandBuffer.emplace_back(0b11000000 | (remapTopToBottom << 3));
@@ -475,6 +689,15 @@ esp_err_t SSD1306Driver::AppendSetComOutputScanDirection(bool remapTopToBottom)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set display offset command to the command buffer.
+ *
+ * Sets the vertical shift by the specified offset.
+ *
+ * @param offset  Display offset (0-63). Number of rows the display is shifted vertically.
+ *                0 = no offset (default/reset).
+ * @return ESP_OK on success, ESP_FAIL if parameter is out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetDisplayOffset(uint8_t offset)
 {
     if (offset >= 64)
@@ -489,6 +712,17 @@ esp_err_t SSD1306Driver::AppendSetDisplayOffset(uint8_t offset)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set COM pins hardware configuration command to the command buffer.
+ *
+ * Configures the COM pins hardware settings.
+ *
+ * @param alternative  If false (0), sequential COM pin configuration (default).
+ *                     If true (1), alternative COM pin configuration.
+ * @param remap       If false (0), disables COM left/right remap (default).
+ *                    If true (1), enables COM left/right remap.
+ * @return ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendSetComPins(bool alternative, bool remap)
 {
     m_CommandBuffer.emplace_back(0b11011010);
@@ -497,6 +731,17 @@ esp_err_t SSD1306Driver::AppendSetComPins(bool alternative, bool remap)
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set display clock divide ratio and oscillator frequency command to the command buffer.
+ *
+ * Sets the display clock divide ratio and oscillator frequency.
+ *
+ * @param divideRatio         Divide ratio for display clock (0-15). Actual divide ratio is (divideRatio + 1).
+ *                           (RESET: 0, divide by 1)
+ * @param oscillatorFrequency Oscillator frequency setting (0-15). Higher value = higher frequency.
+ *                           (RESET: 8)
+ * @return ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetDisplayClockDivideRatioAndOscillatorFrequency(uint8_t divideRatio, uint8_t oscillatorFrequency)
 {
     if (divideRatio >= 16)
@@ -511,11 +756,20 @@ esp_err_t SSD1306Driver::AppendSetDisplayClockDivideRatioAndOscillatorFrequency(
     }
 
     m_CommandBuffer.emplace_back(0b11010101);
-    m_CommandBuffer.emplace_back((divideRatio) | (oscillatorFrequency << 7));
+    m_CommandBuffer.emplace_back((divideRatio) | (oscillatorFrequency << 4));
     
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set pre-charge period command to the command buffer.
+ *
+ * Sets the pre-charge period for the display.
+ *
+ * @param phase1  Phase 1 period (1-15 DCLKs, 0 is invalid; RESET: 2).
+ * @param phase2  Phase 2 period (1-15 DCLKs, 0 is invalid; RESET: 2).
+ * @return ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetPreChargePeriod(uint8_t phase1, uint8_t phase2)
 {
     if (phase1 >= 16 || phase1 == 0)
@@ -530,11 +784,22 @@ esp_err_t SSD1306Driver::AppendSetPreChargePeriod(uint8_t phase1, uint8_t phase2
     }
 
     m_CommandBuffer.emplace_back(0b11011001);
-    m_CommandBuffer.emplace_back((phase1) | (phase2 << 7));
+    m_CommandBuffer.emplace_back((phase1) | (phase2 << 4));
 
     return ESP_OK;
 }
 
+/**
+ * @brief Append the set VCOMH deselect level command to the command buffer.
+ *
+ * Sets the VCOMH deselect level for the display.
+ *
+ * @param level  VCOMH level:
+ *                 0b000: ~0.65 x VCC
+ *                 0b010: ~0.77 x VCC (RESET)
+ *                 0b011: ~0.83 x VCC
+ * @return ESP_OK on success, ESP_FAIL if parameter is out of range.
+ */
 esp_err_t SSD1306Driver::AppendSetVComHDeselectLevel(uint8_t level)
 {
     if (level != 0b000 && level != 0b010 && level != 0b011)
@@ -544,11 +809,17 @@ esp_err_t SSD1306Driver::AppendSetVComHDeselectLevel(uint8_t level)
     }
 
     m_CommandBuffer.emplace_back(0b11011011);
-    m_CommandBuffer.emplace_back(level << 6);
+    m_CommandBuffer.emplace_back(level << 4);
 
     return ESP_OK;
 }
 
+/**
+ * @brief Appends the NOP (No Operation) command to the command buffer.
+ *
+ * @param None
+ * @return esp_err_t ESP_OK on success.
+ */
 esp_err_t SSD1306Driver::AppendNOP()
 {
     m_CommandBuffer.emplace_back(0b11100011);
@@ -556,11 +827,30 @@ esp_err_t SSD1306Driver::AppendNOP()
     return ESP_OK;
 }
 
+/**
+ * @brief Clears the display buffer and writes the cleared buffer to the display RAM.
+ *
+ * @param None
+ * @return esp_err_t ESP_OK on success, or error code from buffer/page operations.
+ */
+esp_err_t SSD1306Driver::ClearDisplay()
+{
+    ESP_ERROR_PROPAGATE(m_Pages.Clear());
+
+    return WriteAllPagesToRam();
+}
+
+/**
+ * @brief Writes a single page from the buffer to the display RAM if it has changed.
+ *
+ * @param page  Page index to write (0-7).
+ * @return esp_err_t ESP_OK on success, ESP_FAIL if page is out of range or command buffer is not empty.
+ */
 esp_err_t SSD1306Driver::WritePageToRam(uint8_t page)
 {
     // Most of the time there's no need for updating the entire screen, so the HasChanged flag notes any changes to pages
     // and if there are none skip the writing
-    if (!m_Pages.HasPageChanged(page))
+    if (!m_Pages.IsPageDirty(page))
         return ESP_OK;
     
     if (m_CommandBuffer.size() > 0)
@@ -572,43 +862,75 @@ esp_err_t SSD1306Driver::WritePageToRam(uint8_t page)
     ESP_LOGI(TAG, "Writing page %d to RAM", page);
 
     AppendControlByteCommand();
-    esp_err_t res = AppendSetPageStartAddress(page); // Page bounds (0-7) are checked here so there's no need for another if statement
-    if (res != ESP_OK)
-        return res;
+    ESP_ERROR_PROPAGATE(AppendSetPageStartAddress(page)); // Page bounds (0-7) are checked here so there's no need for another if statement
 
-    res = FlushCommandBuffer();
-    if (res != ESP_OK)
-        return res;
+    ESP_ERROR_PROPAGATE(FlushCommandBuffer());
     
-    esp_err_t ret = i2c_master_transmit(m_I2CHandle, m_Pages.GetPagePtr(page), PAGE_SIZE, 1000 / portTICK_PERIOD_MS);
-    m_Pages.PageSentToRam(page);
+    ESP_ERROR_PROPAGATE(i2c_master_transmit(m_I2CHandle, m_Pages.GetPagePtr(page), PAGE_SIZE, 1000 / portTICK_PERIOD_MS));
+    m_Pages.UnmarkPageAsDirty(page);
 
-    return ret;
+    return ESP_OK;
 }
 
+/**
+ * @brief Writes all pages from the buffer to the display RAM.
+ *
+ * @param None
+ * @return esp_err_t ESP_OK on success, or error code from page operations.
+ */
 esp_err_t SSD1306Driver::WriteAllPagesToRam()
 {
     for (int i = 0; i < PAGES_COUNT; i++)
     {
-        esp_err_t res = WritePageToRam(i);
-        if (res != ESP_OK)
-            return res;
+        ESP_ERROR_PROPAGATE(WritePageToRam(i));
     }
 
     return ESP_OK;
 }
 
+/**
+ * @brief Writes data to a specific page in the buffer at a given offset.
+ *
+ * @param page    Page index (0-7).
+ * @param data    Pointer to data to write.
+ * @param size    Number of bytes to write.
+ * @param offset  Offset within the page (0-127).
+ * @return esp_err_t ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::WriteToPage(uint8_t page, const void* data, uint8_t size, uint8_t offset)
 {
     return m_Pages.WritePage(page, data, size, offset);
 }
 
+/**
+ * @brief Writes a byte to a specific column in a page in the buffer.
+ *
+ * @param page      Page index (0-7).
+ * @param column    Column index (0-127).
+ * @param data      Data byte to write.
+ * @param overwrite If true, overwrite existing data; if false, OR with existing data.
+ * @return esp_err_t ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::WriteToColumn(uint8_t page, uint8_t column, uint8_t data, bool overwrite)
 {
     return m_Pages.WriteColumn(page, column, data, overwrite);
 }
 
-esp_err_t SSD1306Driver::WriteText(uint8_t x, uint8_t y, std::string text, bool invert)
+esp_err_t SSD1306Driver::WriteToPixel(uint8_t x, uint8_t y, bool value)
+{
+    return m_Pages.WritePixel(x, y, value);
+}
+
+/**
+ * @brief Renders text to the display buffer at the specified position.
+ *
+ * @param x            X coordinate (column, 0-127).
+ * @param y            Y coordinate (pixel row, 0-63).
+ * @param text         String to render (ASCII only).
+ * @param invertColors If true, inverts the text color (white-on-black).
+ * @return esp_err_t ESP_OK on success.
+ */
+esp_err_t SSD1306Driver::WriteText(uint8_t x, uint8_t y, const std::string& text, bool invertColors)
 {
     size_t textLen = text.size();
 
@@ -625,40 +947,47 @@ esp_err_t SSD1306Driver::WriteText(uint8_t x, uint8_t y, std::string text, bool 
             page += 1;
             continue;
         }
-        if (text[i] == ' ') // Skip rendering spaces since it's a waste of time
+        else if (text[i] == ' ') // Skip rendering spaces since it's a waste of time
         {
             column += 8;
             continue;
         }
-        if (text[i] == '\t')
+        else if (text[i] == '\t')
         {
             column += 8 * 4; // 1 tab = 4 spaces
             continue;
+        }
+        else if ((uint8_t)text[i] < 32 || text[i] == 127)
+        {
+            continue; // Skip special characters like DEL and ESC
         }
         else if ((uint8_t)text[i] < 128)
             characterPixelData = s_ASCIIPixelData[(uint8_t)text[i]];
         else
             characterPixelData = s_ASCIIPixelData[(uint8_t)'?'];
 
-        for (int j = 0; j < 8 && column < 128; j++)
+        for (int j = 0; j < 8; j++)
         {
+            if (column >= 128)
+                break;
+
             uint8_t characterColumnPixelData = characterPixelData[j];
 
-            if (invert)
+            if (invertColors)
                 characterColumnPixelData = ~characterColumnPixelData;
 
             if (yOffset == 0) // Character fits in a single page
             {
-                m_Pages.WriteColumn(page, column, characterColumnPixelData, false);
+                ESP_ERROR_PROPAGATE(m_Pages.WriteColumn(page, column, characterColumnPixelData, false));
             }
             else
             {
                 uint8_t characterLowerPart = characterColumnPixelData >> yOffset;
                 uint8_t characterUpperPart = characterColumnPixelData << (8 - yOffset);
 
-                m_Pages.WriteColumn(page, column, characterUpperPart, false);
+                ESP_ERROR_PROPAGATE(m_Pages.WriteColumn(page, column, characterUpperPart, false));
                 if (page + 1 < 8)
-                    m_Pages.WriteColumn(page + 1, column, characterLowerPart, false);
+                    ESP_ERROR_PROPAGATE(m_Pages.WriteColumn(page + 1, column, characterLowerPart, false));
             }
 
             column += 1;
@@ -668,6 +997,134 @@ esp_err_t SSD1306Driver::WriteText(uint8_t x, uint8_t y, std::string text, bool 
     return ESP_OK;
 }
 
+/**
+ * @brief Renders text centered horizontally at the specified vertical position.
+ *
+ * @param y            Y coordinate (pixel row, 0-63).
+ * @param text         String to render (ASCII only).
+ * @param invertColors If true, inverts the text color (white-on-black).
+ * @return esp_err_t ESP_OK on success.
+ */
+esp_err_t SSD1306Driver::WriteTextCentered(uint8_t y, const std::string &text, bool invertColors)
+{
+    uint8_t textWidth = text.length() * 8; // each char is 8 columns
+    if (textWidth >= DISPLAY_WIDTH) {
+        return WriteText(0, y, text, invertColors);
+    }
+
+    uint8_t x = (DISPLAY_WIDTH - textWidth) / 2;
+    return WriteText(x, y, text, invertColors);
+}
+
+/**
+ * @brief Draws a straight line between two points using Bresenham's line algorithm.
+ *
+ * @param x0  X coordinate of the starting point (0-127).
+ * @param y0  Y coordinate of the starting point (0-63).
+ * @param x1  X coordinate of the ending point (0-127).
+ * @param y1  Y coordinate of the ending point (0-63).
+ * @param on  If true, sets pixels ON; if false, sets pixels OFF.
+ * @return esp_err_t ESP_OK on success, or error code from WriteToPixel.
+ */
+esp_err_t SSD1306Driver::DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, bool on)
+{
+    // Bresenham's line algorithm
+    int dx = abs(x1 - x0);
+    int dy = abs(y1 - y0);
+    int sx = (x0 < x1) ? 1 : -1;
+    int sy = (y0 < y1) ? 1 : -1;
+    int err = dx - dy;
+
+    int x = x0, y = y0;
+
+    while (true)
+    {
+        ESP_ERROR_PROPAGATE(WriteToPixel(x, y, on));
+
+        if (x == x1 && y == y1) break;
+
+        int e2 = 2 * err;
+        if (e2 > -dy)
+        {
+            err -= dy;
+            x += sx;
+        }
+        if (e2 < dx)
+        {
+            err += dx;
+            y += sy;
+        }
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Draws a rectangle on the display. If fill is true, fills the rectangle by writing directly to columns.
+ *
+ * @param x      X coordinate of the top-left corner (0-127).
+ * @param y      Y coordinate of the top-left corner (0-63).
+ * @param width  Width of the rectangle in pixels.
+ * @param height Height of the rectangle in pixels.
+ * @param on     If true, sets pixels ON; if false, sets pixels OFF.
+ * @param fill   If true, fills the rectangle; if false, draws only the border.
+ * @return esp_err_t ESP_OK on success, or error code from buffer/page operations.
+ */
+esp_err_t SSD1306Driver::DrawRectangle(uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool on, bool fill)
+{
+    if (fill) // This is a little bit messy, feel free to implement your own draw rectangle if you're not sure what's going on
+    {
+        for (uint8_t i = 0; i < height; i += 8) // Write entire columns at once so it's faster
+        {
+            uint8_t heightToDraw = std::min(height - i, 8);
+            ESP_LOGE(TAG, "HEIGHT TO DRAW %d", (int)heightToDraw);
+            
+            uint8_t rowData = 0xFF >> (8 - heightToDraw);
+
+            uint8_t page = y / 8;
+            ESP_LOGE(TAG, "PAGE %d", (int)page);
+            uint8_t yOffset = y % 8;
+
+            for (int j = 0; j < width; j++)
+            {
+                if (yOffset == 0) // Fits in a single page
+                {
+                    ESP_ERROR_PROPAGATE(m_Pages.WriteColumn(page, x + j, rowData, false));
+                }
+                else
+                {
+                    uint8_t characterLowerPart = rowData >> yOffset;
+                    uint8_t characterUpperPart = rowData << (8 - yOffset);
+
+                    ESP_ERROR_PROPAGATE(m_Pages.WriteColumn(page, x + j, characterUpperPart, false));
+                    if (page + 1 < 8)
+                        ESP_ERROR_PROPAGATE(m_Pages.WriteColumn(page + 1, x + j, characterLowerPart, false));
+                }
+            }
+
+            y+=8;
+        }
+    }
+    else
+    {
+        // Top and bottom edges
+        ESP_ERROR_PROPAGATE(DrawLine(x, y, x + width - 1, y, on));
+        ESP_ERROR_PROPAGATE(DrawLine(x, y + height - 1, x + width - 1, y + height - 1, on));
+
+        // Left and right edges
+        ESP_ERROR_PROPAGATE(DrawLine(x, y, x, y + height - 1, on));
+        ESP_ERROR_PROPAGATE(DrawLine(x + width - 1, y, x + width - 1, y + height - 1, on));
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Returns a pointer to the start of the specified page buffer.
+ *
+ * @param page  Page index (0-7).
+ * @return const uint8_t* Pointer to the start of the page buffer, or nullptr if page is out of range.
+ */
 const uint8_t *SSD1306Driver::Pages::GetPagePtr(uint8_t page)
 {
     if (page >= 8)
@@ -679,6 +1136,15 @@ const uint8_t *SSD1306Driver::Pages::GetPagePtr(uint8_t page)
     return Buffer.data() + (page * PAGE_SIZE);
 }
 
+/**
+ * @brief Writes data to a specific page buffer at a given offset and marks the page as dirty.
+ *
+ * @param page    Page index (0-7).
+ * @param data    Pointer to the data to write.
+ * @param size    Number of bytes to write (size + offset must be < 128).
+ * @param offset  Offset within the page (0-127).
+ * @return esp_err_t ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::Pages::WritePage(uint8_t page, const void* data, uint8_t size, uint8_t offset)
 {
     if (page >= 8)
@@ -698,12 +1164,20 @@ esp_err_t SSD1306Driver::Pages::WritePage(uint8_t page, const void* data, uint8_
     pagePtr[0] = 0x40; // Set the control byte
     memcpy(pagePtr + 1 + offset, data, size);
 
-    // Set page bit to 1
-    HavePagesChanged = HavePagesChanged | (1 << page);
+    MarkPageAsDirty(page);
 
     return ESP_OK;
 }
 
+/**
+ * @brief Writes a byte to a specific column in a page buffer and marks the page as dirty.
+ *
+ * @param page      Page index (0-7).
+ * @param column    Column index (0-127).
+ * @param data      Data byte to write.
+ * @param overwrite If true, overwrite the column data; if false, OR with existing data.
+ * @return esp_err_t ESP_OK on success, ESP_FAIL if parameters are out of range.
+ */
 esp_err_t SSD1306Driver::Pages::WriteColumn(uint8_t page, uint8_t column, uint8_t data, bool overwrite)
 {
     if (page >= 8)
@@ -725,19 +1199,95 @@ esp_err_t SSD1306Driver::Pages::WriteColumn(uint8_t page, uint8_t column, uint8_
     else
         *columnPtr |= data; // Don't everwrite existing data, just add new one
 
-    // Set page bit to 1
-    HavePagesChanged = HavePagesChanged | (1 << page);
+    MarkPageAsDirty(page);
 
     return ESP_OK;
 }
 
-bool SSD1306Driver::Pages::HasPageChanged(uint8_t page)
+/**
+ * @brief Sets or clears a single pixel in the buffer.
+ *
+ * @param x      X coordinate (column, 0-127).
+ * @param y      Y coordinate (pixel row, 0-63).
+ * @param value  If true, sets the pixel; if false, clears the pixel.
+ * @return esp_err_t ESP_OK on success, ESP_FAIL if coordinates are out of range.
+ */
+esp_err_t SSD1306Driver::Pages::WritePixel(uint8_t x, uint8_t y, bool value)
 {
-    return (HavePagesChanged & (1 << page)) > 0;
+    if (x >= 128 || y >= 64)
+    {
+        ESP_LOGE(TAG, "Pixel is out of boundaries! x: %d | y: %d", (int)x, (int)y);
+        return ESP_FAIL;
+    }
+
+    uint8_t page = y / 8;
+    uint8_t bit = y % 8;
+
+    uint8_t* pagePtr = Buffer.data() + (page * PAGE_SIZE);
+    uint8_t* columnPtr = pagePtr + 1 + x; // + 1 because first byte is control data byte (0x40)
+
+    if (value) {
+        *columnPtr |= (1 << bit);
+    } else {
+        *columnPtr &= ~(1 << bit);
+    }
+
+    MarkPageAsDirty(page);
+
+    return ESP_OK;
 }
 
-void SSD1306Driver::Pages::PageSentToRam(uint8_t page)
+/**
+ * @brief Clears all page buffers and marks all pages as dirty.
+ *
+ * @param None
+ * @return esp_err_t ESP_OK on success.
+ */
+esp_err_t SSD1306Driver::Pages::Clear()
+{
+    for (uint8_t page = 0; page < PAGES_COUNT; page++)
+    {
+        uint8_t* pagePtr = Buffer.data() + (page * PAGE_SIZE);
+        pagePtr[0] = 0x40; // Control byte
+        memset(pagePtr + 1, 0, 128); // Clear data
+    }
+
+    DirtyPages |= 0xFF; // Mark all pages as dirty
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Checks if a page buffer has been modified since the last write to RAM.
+ *
+ * @param page  Page index (0-7).
+ * @return bool True if the page is dirty, false otherwise.
+ */
+bool SSD1306Driver::Pages::IsPageDirty(uint8_t page)
+{
+    return (DirtyPages & (1 << page)) > 0;
+}
+
+/**
+ * @brief Marks a page as clean (not dirty)
+ *
+ * @param page  Page index (0-7).
+ * @return void
+ */
+void SSD1306Driver::Pages::UnmarkPageAsDirty(uint8_t page)
 {
     // Set page bit to 0
-    HavePagesChanged = HavePagesChanged & ~(1 << page);
+    DirtyPages = DirtyPages & ~(1 << page);
+}
+
+/**
+ * @brief Marks a page as dirty
+ *
+ * @param page  Page index (0-7).
+ * @return void
+ */
+void SSD1306Driver::Pages::MarkPageAsDirty(uint8_t page)
+{
+    // Set page bit to 1
+    DirtyPages = DirtyPages | (1 << page);
 }

@@ -32,6 +32,9 @@ public:
     void AppendControlByteCommand();
     void AppendControlByteData();
 
+    // Charge Pump Commands
+    esp_err_t AppendChargePumpSetting(bool enable);
+
     // Fundamental Commands
     esp_err_t AppendSetContrastControl(uint8_t contrast);
     esp_err_t AppendEntireDisplayOn(bool on);
@@ -67,14 +70,28 @@ public:
     esp_err_t AppendSetVComHDeselectLevel(uint8_t level);
     esp_err_t AppendNOP();
 
+    esp_err_t ClearDisplay();
+
     esp_err_t WritePageToRam(uint8_t page);
     esp_err_t WriteAllPagesToRam();
 
     esp_err_t WriteToPage(uint8_t page, const void* data, uint8_t size, uint8_t offset);
     esp_err_t WriteToColumn(uint8_t page, uint8_t column, uint8_t data, bool overwrite);
+    esp_err_t WriteToPixel(uint8_t x, uint8_t y, bool value);
 
-    esp_err_t WriteText(uint8_t x, uint8_t y, std::string text, bool invert);
+    esp_err_t WriteText(uint8_t x, uint8_t y, const std::string& text, bool invertColors);
+    esp_err_t WriteTextCentered(uint8_t y, const std::string& text, bool invertColors);
+
+    esp_err_t DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, bool on);
+    esp_err_t DrawRectangle(uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool on, bool fill);
 private:
+
+    static constexpr uint8_t DISPLAY_WIDTH = 128;
+    static constexpr uint8_t DISPLAY_HEIGHT = 64;
+    static constexpr uint8_t PAGES_COUNT = 8;
+    // 129 because the first byte in each page is 0x40 (control data byte) and the rest 128 are columns
+    // This allows to send the data through the I2C without any copying and "stitching" the control byte
+    static constexpr uint8_t PAGE_SIZE = 129;
 
     class Pages
     {
@@ -82,19 +99,18 @@ private:
         const uint8_t* GetPagePtr(uint8_t page);
         esp_err_t WritePage(uint8_t page, const void* data, uint8_t size, uint8_t offset);
         esp_err_t WriteColumn(uint8_t page, uint8_t column, uint8_t data, bool overwrite);
+        esp_err_t WritePixel(uint8_t x, uint8_t y, bool value);
+        esp_err_t Clear();
 
-        bool HasPageChanged(uint8_t page);
-        void PageSentToRam(uint8_t page);
+        bool IsPageDirty(uint8_t page);
+        void UnmarkPageAsDirty(uint8_t page);
+        void MarkPageAsDirty(uint8_t page);
+        uint8_t GetDirtyPagesMask() const { return DirtyPages; }
     private:
-        #define PAGES_COUNT 8
-
-        // 129 because the first byte in each page is 0x40 (control data byte) and the rest 128 are columns
-        // This allows to send the data through the I2C without any copying and "stitching" the control byte
-        #define PAGE_SIZE 129
 
         // Store everything in a single continous buffer so it's more memory effiecient
         std::array<uint8_t, PAGE_SIZE * PAGES_COUNT> Buffer;
-        uint8_t HavePagesChanged = 0; // Bit field
+        uint8_t DirtyPages = 0; // Bit field
     };
 
     Pages m_Pages;
