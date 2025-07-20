@@ -1025,7 +1025,7 @@ esp_err_t SSD1306Driver::WriteToPixel(uint8_t x, uint8_t y, bool value)
  */
 esp_err_t SSD1306Driver::DrawData(uint8_t x, uint8_t y, uint8_t width, uint8_t height, const uint8_t *data, bool invertColors, bool setOrClear)
 {
-    if (x >= 128 || y >= 64)
+    if (x >= DISPLAY_WIDTH || y >= DISPLAY_HEIGHT)
         return ESP_OK;
     if (width <= 0 || height <= 0)
         return ESP_OK;
@@ -1087,7 +1087,7 @@ esp_err_t SSD1306Driver::DrawData(uint8_t x, uint8_t y, uint8_t width, uint8_t h
  */
 esp_err_t SSD1306Driver::DrawText(uint8_t x, uint8_t y, const std::string& text, bool invertColors, bool setOrClear)
 {
-    if (x >= 128 || y >= 64)
+    if (x >= DISPLAY_WIDTH || y >= DISPLAY_HEIGHT)
         return ESP_OK;
 
     size_t textLen = text.size();
@@ -1126,7 +1126,7 @@ esp_err_t SSD1306Driver::DrawText(uint8_t x, uint8_t y, const std::string& text,
 
         for (int j = 0; j < 8; j++)
         {
-            if (column >= 128)
+            if (column >= DISPLAY_WIDTH)
                 break;
 
             uint8_t characterColumnPixelData = characterPixelData[j];
