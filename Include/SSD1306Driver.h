@@ -22,90 +22,97 @@ public:
 
     SSD1306Driver(const SSD1306DriverConfiguration& configuration);
 
-    esp_err_t FlushCommandBuffer();
+    // High Level Commands
+
+    [[nodiscard]] esp_err_t ClearDisplay();
+    [[nodiscard]] esp_err_t FillPage(uint8_t page, uint8_t value);
+
+    [[nodiscard]] esp_err_t WritePageToRam(uint8_t page);
+    [[nodiscard]] esp_err_t WriteColumnsToRam(uint8_t page, uint8_t startColumn, uint8_t endColumn);
+    [[nodiscard]] esp_err_t WriteAllPagesToRam();
+
+    [[nodiscard]] esp_err_t WriteToPage(uint8_t page, const void* data, uint8_t size, uint8_t offset);
+    [[nodiscard]] esp_err_t WriteToColumn(uint8_t page, uint8_t column, uint8_t data, bool setOrClear);
+    [[nodiscard]] esp_err_t WriteToPixel(uint8_t x, uint8_t y, bool value);
+
+    [[nodiscard]] esp_err_t DrawData(uint8_t x, uint8_t y, uint8_t width, uint8_t height, const uint8_t* data, bool invertColors, bool setOrClear);
+
+    [[nodiscard]] esp_err_t DrawText(uint8_t x, uint8_t y, const std::string& text, bool invertColors, bool setOrClear);
+    [[nodiscard]] esp_err_t DrawTextCentered(uint8_t y, const std::string& text, bool invertColors, bool setOrClear);
+
+    [[nodiscard]] esp_err_t DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, bool setOrClear);
+    [[nodiscard]] esp_err_t DrawRectangle(uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool setOrClear, bool fill);
 
     //
     // --------------- All raw commands ---------------
     //
     // For more info on the commands consult the chapter 9 (command table) in the data sheet https://cdn-shop.adafruit.com/datasheets/SSD1306.pdf#
 
+    [[nodiscard]] esp_err_t FlushCommandBuffer();
     void AppendControlByteCommand();
     void AppendControlByteData();
 
     // Charge Pump Commands
-    esp_err_t AppendChargePumpSetting(bool enable);
+    [[nodiscard]] esp_err_t AppendChargePumpSetting(bool enable);
 
     // Fundamental Commands
-    esp_err_t AppendSetContrastControl(uint8_t contrast);
-    esp_err_t AppendEntireDisplayOn(bool on);
-    esp_err_t AppendSetNormalInverseDisplay(bool invert);
-    esp_err_t AppendSetDisplayOnOff(bool on);
+    [[nodiscard]] esp_err_t AppendSetContrastControl(uint8_t contrast);
+    [[nodiscard]] esp_err_t AppendEntireDisplayOn(bool on);
+    [[nodiscard]] esp_err_t AppendSetNormalInverseDisplay(bool invert);
+    [[nodiscard]] esp_err_t AppendSetDisplayOnOff(bool on);
 
     // Scrolling Commands
-    esp_err_t AppendContinuousHorizontalScrollSetup(bool leftHorizontalScroll, uint8_t startPageAddress, uint8_t timeInterval, uint8_t endPageAddress);
-    esp_err_t AppendContinuousVerticalAndHorizontalScrollSetup(uint8_t direction, uint8_t startPageAddress, uint8_t timeInterval, uint8_t endPageAddress, uint8_t verticalScrollingOffset);
-    esp_err_t AppendDeactivateScroll();
-    esp_err_t AppendActivateScroll();
-    esp_err_t AppendSetVerticalScrollArea(uint8_t numberOfRowsFixed, uint8_t numberOfRowsScroll);
+    [[nodiscard]] esp_err_t AppendContinuousHorizontalScrollSetup(bool leftHorizontalScroll, uint8_t startPageAddress, uint8_t timeInterval, uint8_t endPageAddress);
+    [[nodiscard]] esp_err_t AppendContinuousVerticalAndHorizontalScrollSetup(uint8_t direction, uint8_t startPageAddress, uint8_t timeInterval, uint8_t endPageAddress, uint8_t verticalScrollingOffset);
+    [[nodiscard]] esp_err_t AppendDeactivateScroll();
+    [[nodiscard]] esp_err_t AppendActivateScroll();
+    [[nodiscard]] esp_err_t AppendSetVerticalScrollArea(uint8_t numberOfRowsFixed, uint8_t numberOfRowsScroll);
     
     // Addressing Setting Commands
-    esp_err_t AppendSetLowerColumnStartAddress(uint8_t addressLow);
-    esp_err_t AppendSetHigherColumnStartAddress(uint8_t addressHigh);
-    esp_err_t AppendSetMemoryAddressingMode(uint8_t mode);
-    esp_err_t AppendSetColumnAddress(uint8_t startAddress, uint8_t endAddress);
-    esp_err_t AppendSetPageAddress(uint8_t startAddress, uint8_t endAddress);
-    esp_err_t AppendSetPageStartAddress(uint8_t address);
+    [[nodiscard]] esp_err_t AppendSetLowerColumnStartAddress(uint8_t addressLow);
+    [[nodiscard]] esp_err_t AppendSetHigherColumnStartAddress(uint8_t addressHigh);
+    [[nodiscard]] esp_err_t AppendSetMemoryAddressingMode(uint8_t mode);
+    [[nodiscard]] esp_err_t AppendSetColumnAddress(uint8_t startAddress, uint8_t endAddress);
+    [[nodiscard]] esp_err_t AppendSetPageAddress(uint8_t startAddress, uint8_t endAddress);
+    [[nodiscard]] esp_err_t AppendSetPageStartAddress(uint8_t address);
 
     // Hardware Configuration Commands
-    esp_err_t AppendSetDisplayStartLine(uint8_t line);
-    esp_err_t AppendSetSegmentRemap(bool remapLeftToRight);
-    esp_err_t AppendSetMultiplexRatio(uint8_t ratio);
-    esp_err_t AppendSetComOutputScanDirection(bool remapTopToBottom);
-    esp_err_t AppendSetDisplayOffset(uint8_t offset);
-    esp_err_t AppendSetComPins(bool alternative, bool remap);
+    [[nodiscard]] esp_err_t AppendSetDisplayStartLine(uint8_t line);
+    [[nodiscard]] esp_err_t AppendSetSegmentRemap(bool remapLeftToRight);
+    [[nodiscard]] esp_err_t AppendSetMultiplexRatio(uint8_t ratio);
+    [[nodiscard]] esp_err_t AppendSetComOutputScanDirection(bool remapTopToBottom);
+    [[nodiscard]] esp_err_t AppendSetDisplayOffset(uint8_t offset);
+    [[nodiscard]] esp_err_t AppendSetComPins(bool alternative, bool remap);
 
     // Timing & Driving Scheme Setting Commands
-    esp_err_t AppendSetDisplayClockDivideRatioAndOscillatorFrequency(uint8_t divideRatio, uint8_t oscillatorFrequency);
-    esp_err_t AppendSetPreChargePeriod(uint8_t phase1, uint8_t phase2);
-    esp_err_t AppendSetVComHDeselectLevel(uint8_t level);
-    esp_err_t AppendNOP();
-
-    esp_err_t ClearDisplay();
-
-    esp_err_t WritePageToRam(uint8_t page);
-    esp_err_t WriteAllPagesToRam();
-
-    esp_err_t WriteToPage(uint8_t page, const void* data, uint8_t size, uint8_t offset);
-    esp_err_t WriteToColumn(uint8_t page, uint8_t column, uint8_t data, bool overwrite);
-    esp_err_t WriteToPixel(uint8_t x, uint8_t y, bool value);
-
-    esp_err_t WriteText(uint8_t x, uint8_t y, const std::string& text, bool invertColors);
-    esp_err_t WriteTextCentered(uint8_t y, const std::string& text, bool invertColors);
-
-    esp_err_t DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, bool on);
-    esp_err_t DrawRectangle(uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool on, bool fill);
+    [[nodiscard]] esp_err_t AppendSetDisplayClockDivideRatioAndOscillatorFrequency(uint8_t divideRatio, uint8_t oscillatorFrequency);
+    [[nodiscard]] esp_err_t AppendSetPreChargePeriod(uint8_t phase1, uint8_t phase2);
+    [[nodiscard]] esp_err_t AppendSetVComHDeselectLevel(uint8_t level);
+    [[nodiscard]] esp_err_t AppendNOP();
 private:
 
     static constexpr uint8_t DISPLAY_WIDTH = 128;
     static constexpr uint8_t DISPLAY_HEIGHT = 64;
     static constexpr uint8_t PAGES_COUNT = 8;
     // 129 because the first byte in each page is 0x40 (control data byte) and the rest 128 are columns
-    // This allows to send the data through the I2C without any copying and "stitching" the control byte
+    // This allows to send the data through the I2C without any copying and "stitching" the control byte when sending full pages
     static constexpr uint8_t PAGE_SIZE = 129;
 
     class Pages
     {
     public:
-        const uint8_t* GetPagePtr(uint8_t page);
-        esp_err_t WritePage(uint8_t page, const void* data, uint8_t size, uint8_t offset);
-        esp_err_t WriteColumn(uint8_t page, uint8_t column, uint8_t data, bool overwrite);
-        esp_err_t WritePixel(uint8_t x, uint8_t y, bool value);
-        esp_err_t Clear();
+        [[nodiscard]] const uint8_t* GetPagePtr(uint8_t page);
+        [[nodiscard]] const uint8_t* GetColumnPtr(uint8_t page, uint8_t column);
+        [[nodiscard]] esp_err_t WritePage(uint8_t page, const void* data, uint8_t size, uint8_t offset);
+        [[nodiscard]] esp_err_t WriteColumn(uint8_t page, uint8_t column, uint8_t data, bool setOrClear);
+        [[nodiscard]] esp_err_t WritePixel(uint8_t x, uint8_t y, bool value);
+        [[nodiscard]] esp_err_t Clear();
+        [[nodiscard]] esp_err_t FillPage(uint8_t page, uint8_t value);
 
-        bool IsPageDirty(uint8_t page);
+        [[nodiscard]] bool IsPageDirty(uint8_t page);
         void UnmarkPageAsDirty(uint8_t page);
         void MarkPageAsDirty(uint8_t page);
-        uint8_t GetDirtyPagesMask() const { return DirtyPages; }
+        [[nodiscard]] uint8_t GetDirtyPagesMask() const { return DirtyPages; }
     private:
 
         // Store everything in a single continous buffer so it's more memory effiecient
