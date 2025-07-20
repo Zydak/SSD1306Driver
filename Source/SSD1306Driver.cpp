@@ -853,7 +853,7 @@ esp_err_t SSD1306Driver::AppendNOP()
 }
 
 /**
- * @brief Clears the display buffer and writes the cleared buffer to the display RAM.
+ * @brief Clears the display buffer;
  *
  * @param None
  * 
@@ -863,7 +863,7 @@ esp_err_t SSD1306Driver::ClearDisplay()
 {
     ESP_ERROR_PROPAGATE(m_Pages.Clear());
 
-    return WriteAllPagesToRam();
+    return ESP_OK;
 }
 
 /**
@@ -902,7 +902,7 @@ esp_err_t SSD1306Driver::WritePageToRam(uint8_t page)
     AppendControlByteCommand();
     ESP_ERROR_PROPAGATE(AppendSetPageStartAddress(page)); // Page bounds (0-7) are checked here so there's no need for another if statement
     ESP_ERROR_PROPAGATE(AppendSetLowerColumnStartAddress(0));
-    ESP_ERROR_PROPAGATE(AppendSetLowerColumnStartAddress(0)); // First column
+    ESP_ERROR_PROPAGATE(AppendSetHigherColumnStartAddress(0)); // First column
 
     ESP_ERROR_PROPAGATE(FlushCommandBuffer());
     

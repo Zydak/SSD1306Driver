@@ -2,6 +2,31 @@
 ![photo_2025-07-20_11-48-32](https://github.com/user-attachments/assets/b3b9ce14-04b4-4e04-af10-eb70784b485e)
 Simple and extensible SSD1306 OLED 128x64 display driver for ESP32 written in C++ 17 using ESP-IDF. It handles I2C bus and the display through easy to work with SSD1306Driver object.
 
+## Usage
+1. Clean your project with 
+```
+idf.py clean
+```
+2. Add the dependency
+```
+idf.py add-dependency --path application --git https://github.com/Zydak/SSD1306Driver.git SSD1306Driver
+```
+3. Update the dependecy just in case
+```
+idf.py update-dependencies
+```
+4. SSD1306Driver relies on `driver` module so you might also need to add driver PRIV_REQUIRES to your main project like so:
+```
+idf_component_register(
+    SRCS "main.cpp"
+    PRIV_REQUIRES driver <- This
+)
+```
+5. Build
+```
+idf.py build
+```
+
 ## Basic Example
 
 Simple example showcasing some of the features of the driver, that is
@@ -13,6 +38,8 @@ Simple example showcasing some of the features of the driver, that is
 ```
 #include "SSD1306Driver.h"
 #include <math.h>
+
+#include "freertos/FreeRTOS.h"
 
 #define PI 3.14159265
 
@@ -51,22 +78,35 @@ void DrawStar(SSD1306Driver& driver, int centerX, int centerY, int radius, int r
 extern "C" void app_main(void)
 {
    SSD1306Driver::SSD1306DriverConfiguration config{};
+   config.I2CPort = I2C_NUM_0;
+   config.SclIO = GPIO_NUM_11;
+   config.SdaIO = GPIO_NUM_10;
+   config.I2CSclSpeedHz = 400000;
+   config.InvertColors = false;
    config.FlipRendering = true;
    SSD1306Driver driver(config);
 
-   ESP_ERROR_CHECK(driver.DrawText(0, 35, "github.com/Zydak", false, true));
-   ESP_ERROR_CHECK(driver.DrawLine(0, 45, 127, 45, true));
-   ESP_ERROR_CHECK(driver.DrawData(0, 0, 32, 32, (uint8_t*)&githubLogo, false, true));
+   int i = 0;
+   while(true)
+   {
+      ESP_ERROR_CHECK(driver.DrawText(0, 35, "github.com/Zydak", false, true));
+      ESP_ERROR_CHECK(driver.DrawLine(0, 45, 127, 45, true));
+      ESP_ERROR_CHECK(driver.DrawData(0, 0, 32, 32, (uint8_t*)&githubLogo, i % 20 > 10, true));
 
-   DrawStar(driver, 50,  10, 10, 0);
-   DrawStar(driver, 70,  20, 10, 45);
-   DrawStar(driver, 90,  10, 10, 180);
-   DrawStar(driver, 110, 20, 10, 90);
+      DrawStar(driver, 50,  10, 10, 0 + i * 15);
+      DrawStar(driver, 70,  20, 10, 45 + i * 15);
+      DrawStar(driver, 90,  10, 10, 180 + i * 15);
+      DrawStar(driver, 110, 20, 10, 90 + i * 15);
 
-   ESP_ERROR_CHECK(driver.DrawRectangle(0, 55, 128, 9, true, true));
-   ESP_ERROR_CHECK(driver.DrawTextCentered(56, "SSD1306 Driver", false, false));
+      ESP_ERROR_CHECK(driver.DrawRectangle(0, 55, 128, 9, true, true));
+      ESP_ERROR_CHECK(driver.DrawTextCentered(56, "SSD1306 Driver", false, false));
 
-   ESP_ERROR_CHECK(driver.WriteAllPagesToRam());
+      ESP_ERROR_CHECK(driver.WriteAllPagesToRam());
+
+      ESP_ERROR_CHECK(driver.ClearDisplay());
+      vTaskDelay(100 / portTICK_PERIOD_MS);
+      i++;
+   }
 }
 ```
 #### Example output
@@ -79,7 +119,7 @@ extern "C" void app_main(void)
 ### High Level Methods
 High level methods are functions that allow you to interface with SSD1306 display without having to know much about it's architecture.
 
-`ClearDisplay()`: Clears the entire display buffer by setting all pixels to OFF and immediately writes the cleared buffer to the display RAM.
+`ClearDisplay()`: Clears the entire display buffer by setting all pixels to OFF.
 
 `FillPage(uint8_t page, uint8_t value)`: Fills an entire page (8-pixel high row) with the specified byte value, where each bit in the value represents a vertical pixel column within that page.
 
