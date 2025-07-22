@@ -6,6 +6,7 @@
 #include <vector>
 #include <array>
 #include <string>
+#include <expected>
 
 class SSD1306Driver
 {
@@ -16,11 +17,18 @@ public:
         gpio_num_t SdaIO = GPIO_NUM_10;
         gpio_num_t SclIO = GPIO_NUM_11;
         uint32_t I2CSclSpeedHz = 400000;
-        bool FlipRendering = false;
-        bool InvertColors = false;
     };
 
-    SSD1306Driver(const SSD1306DriverConfiguration& configuration);
+    [[nodiscard]] static std::expected<SSD1306Driver, esp_err_t> New(const SSD1306DriverConfiguration& configuration);
+
+    SSD1306Driver(const SSD1306Driver& other) = delete;
+    SSD1306Driver& operator=(const SSD1306Driver& other) = delete;
+    SSD1306Driver(SSD1306Driver&& other) noexcept;
+    SSD1306Driver& operator=(SSD1306Driver&& other) noexcept;
+
+    ~SSD1306Driver();
+
+    [[nodiscard]] esp_err_t SendInitializationSequence(bool flipRendering, bool invertColors);
 
     // High Level Commands
 
@@ -101,6 +109,33 @@ private:
     class Pages
     {
     public:
+        Pages()
+        {
+            Buffer.resize(PAGE_SIZE * PAGES_COUNT);
+        }
+
+        Pages(const Pages& other) = delete;
+        Pages& operator=(const Pages& other) = delete;
+
+        Pages(Pages&& other) noexcept
+            : Buffer(std::move(other.Buffer)), DirtyPages(other.DirtyPages)
+        {
+            other.DirtyPages = 0;
+        }
+
+        Pages& operator=(Pages&& other) noexcept
+        {
+            if (this == &other)
+                return *this;
+
+            Buffer = std::move(other.Buffer);
+            DirtyPages = other.DirtyPages;
+
+            other.DirtyPages = 0;
+
+            return *this;
+        }
+
         [[nodiscard]] const uint8_t* GetPagePtr(uint8_t page);
         [[nodiscard]] const uint8_t* GetColumnPtr(uint8_t page, uint8_t column);
         [[nodiscard]] esp_err_t WritePage(uint8_t page, const void* data, uint8_t size, uint8_t offset);
@@ -116,9 +151,13 @@ private:
     private:
 
         // Store everything in a single continous buffer so it's more memory effiecient
-        std::array<uint8_t, PAGE_SIZE * PAGES_COUNT> Buffer;
+        std::vector<uint8_t> Buffer; // This can't be array because it causes stack overflow on esp32
         uint8_t DirtyPages = 0; // Bit field
     };
+
+    SSD1306Driver(Pages&& pages, i2c_master_bus_handle_t&& busHandle, i2c_master_dev_handle_t&& devHandle, std::vector<uint8_t>&& commandBuffer)
+        : m_Pages{std::move(pages)}, m_I2CBusHandle(std::move(busHandle)), m_I2CHandle(std::move(devHandle)), m_CommandBuffer(std::move(commandBuffer))
+    {}
 
     Pages m_Pages;
 

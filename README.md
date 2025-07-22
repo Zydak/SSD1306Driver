@@ -1,5 +1,6 @@
 # SSD1306Driver
 ![photo_2025-07-20_11-48-32](https://github.com/user-attachments/assets/b3b9ce14-04b4-4e04-af10-eb70784b485e)
+
 Simple and extensible SSD1306 OLED 128x64 display driver for ESP32 written in C++ 17 using ESP-IDF. It handles I2C bus and the display through easy to work with SSD1306Driver object.
 
 ## Usage
@@ -77,14 +78,15 @@ void DrawStar(SSD1306Driver& driver, int centerX, int centerY, int radius, int r
 
 extern "C" void app_main(void)
 {
-   SSD1306Driver::SSD1306DriverConfiguration config{};
-   config.I2CPort = I2C_NUM_0;
-   config.SclIO = GPIO_NUM_11;
-   config.SdaIO = GPIO_NUM_10;
-   config.I2CSclSpeedHz = 400000;
-   config.InvertColors = false;
-   config.FlipRendering = true;
-   SSD1306Driver driver(config);
+   SSD1306Driver::SSD1306DriverConfiguration configuration{};
+   configuration.I2CPort = I2C_NUM_0;
+   configuration.SclIO = GPIO_NUM_11;
+   configuration.SdaIO = GPIO_NUM_10;
+   configuration.I2CSclSpeedHz = 400000;
+
+   SSD1306Driver driver = SSD1306Driver::New(configuration).value();
+
+   ESP_ERROR_CHECK(driver.SendInitializationSequence(true, false));
 
    int i = 0;
    while(true)

@@ -1,11 +1,11 @@
 #include "SSD1306Driver.h"
 
-#include "esp_log.h"
 
 #include <freertos/FreeRTOS.h>
 
 #include <cstring>
 #include <math.h>
+#include "esp_log.h"
 
 #define TAG "SSD1306Driver"
 
@@ -143,70 +143,131 @@ static const uint8_t s_ASCIIPixelData[128][8] = {
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // 127 -> 0x7F (DEL)
 };
 
-#define ESP_ERROR_PROPAGATE(result, ...)\
-    if (result != ESP_OK){\
-        return result;\
+#define ESP_ERROR_PROPAGATE(func, ...)\
+    {\
+        esp_err_t result = func;\
+        if (result != ESP_OK){\
+            return result;\
+        }\
+    }
+
+#define ESP_ERROR_PROPAGATE_UNEXPECTED(func, ...)\
+    {\
+        esp_err_t result = func;\
+        if (result != ESP_OK){\
+            return std::unexpected(result);\
+        }\
     }
 
 /**
- * @brief Initializes the SSD1306Driver object and configures the SSD1306 OLED display.
+ * @brief Initializes the SSD1306Driver object.
  *
  * @param configuration  Reference to a SSD1306DriverConfiguration struct containing:
  *   - I2CPort: I2C port number to use for communication.
  *   - SclIO: GPIO number for the I2C SCL line.
  *   - SdaIO: GPIO number for the I2C SDA line.
  *   - I2CSclSpeedHz: I2C clock speed in Hz.
- *   - InvertColors: If true, the display will be initialized in inverted color mode (white-on-black).
- *   - FlipRendering: If true, the display will be initialized with flipped orientation (mirrored horizontally/vertically).
  *
- * @return None (constructor)
+ * @return expected with SSD1306Driver if successful, esp_err_t otherwise.
  */
-SSD1306Driver::SSD1306Driver(const SSD1306DriverConfiguration &configuration)
+std::expected<SSD1306Driver, esp_err_t> SSD1306Driver::New(const SSD1306DriverConfiguration &configuration)
 {
     i2c_master_bus_config_t busConfig = {};
-    busConfig.clk_source = I2C_CLK_SRC_DEFAULT;
-    busConfig.glitch_ignore_cnt = 7;
-    busConfig.i2c_port = configuration.I2CPort;
-    busConfig.scl_io_num = configuration.SclIO;
-    busConfig.sda_io_num = configuration.SdaIO;
-    busConfig.flags.enable_internal_pullup = true;
+   busConfig.clk_source = I2C_CLK_SRC_DEFAULT;
+   busConfig.glitch_ignore_cnt = 7;
+   busConfig.i2c_port = configuration.I2CPort;
+   busConfig.scl_io_num = configuration.SclIO;
+   busConfig.sda_io_num = configuration.SdaIO;
+   busConfig.flags.enable_internal_pullup = true;
+   i2c_master_bus_handle_t busHandle;
+   i2c_master_dev_handle_t devHandle;
 
-    ESP_ERROR_CHECK(i2c_new_master_bus(&busConfig, &m_I2CBusHandle));
-    ESP_ERROR_CHECK(i2c_master_probe(m_I2CBusHandle, 0x3C, 5000 / portTICK_PERIOD_MS));
-    i2c_device_config_t I2CDeviceConfig{};
-    I2CDeviceConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    I2CDeviceConfig.device_address = 0x3C;
-    I2CDeviceConfig.scl_speed_hz = configuration.I2CSclSpeedHz;
-    ESP_ERROR_CHECK(i2c_master_bus_add_device(m_I2CBusHandle, &I2CDeviceConfig, &m_I2CHandle));
+   ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_new_master_bus(&busConfig, &busHandle));
+   ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_master_probe(busHandle, 0x3C, 5000 / portTICK_PERIOD_MS));
+   i2c_device_config_t I2CDeviceConfig{};
+   I2CDeviceConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+   I2CDeviceConfig.device_address = 0x3C;
+   I2CDeviceConfig.scl_speed_hz = configuration.I2CSclSpeedHz;
+   ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_master_bus_add_device(busHandle, &I2CDeviceConfig, &devHandle));
 
-    m_CommandBuffer.reserve(256);
+   std::vector<uint8_t> commandBuffer;
+   commandBuffer.reserve(256);
 
-    ESP_ERROR_CHECK(ClearDisplay());
+   SSD1306Driver::Pages pages{};
+
+   return SSD1306Driver(std::move(pages), std::move(busHandle), std::move(devHandle), std::move(commandBuffer));
+}
+
+SSD1306Driver::SSD1306Driver(SSD1306Driver &&other)
+    : m_Pages{std::move(other.m_Pages)}, m_I2CBusHandle(other.m_I2CBusHandle), m_I2CHandle(other.m_I2CHandle), m_CommandBuffer(std::move(other.m_CommandBuffer))
+{
+    other.m_I2CBusHandle = nullptr;
+    other.m_I2CHandle = nullptr;
+}
+
+SSD1306Driver &SSD1306Driver::operator=(SSD1306Driver &&other)
+{
+    if (this == &other)
+        return *this;
+
+    m_Pages = std::move(other.m_Pages);
+    m_CommandBuffer = std::move(other.m_CommandBuffer);
+
+    m_I2CBusHandle = other.m_I2CBusHandle;
+    other.m_I2CBusHandle = nullptr;
+    m_I2CHandle = other.m_I2CHandle;
+    other.m_I2CHandle = nullptr;
+
+    return *this;
+}
+
+SSD1306Driver::~SSD1306Driver()
+{
+    if (m_I2CHandle != nullptr)
+        i2c_master_bus_rm_device(m_I2CHandle);
+
+    if (m_I2CBusHandle != nullptr)
+        i2c_del_master_bus(m_I2CBusHandle);
+}
+
+/**
+ * @brief Configures the SSD1306 OLED display.
+ *
+ * @param InvertColors: If true, the display will be initialized in inverted color mode (white-on-black).
+ * @param FlipRendering: If true, the display will be initialized with flipped orientation (mirrored horizontally/vertically).
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t SSD1306Driver::SendInitializationSequence(bool flipRendering, bool invertColors)
+{
+    ESP_ERROR_PROPAGATE(ClearDisplay());
 
     // Reset Everything according to data sheet command table https://cdn-shop.adafruit.com/datasheets/SSD1306.pdf
     AppendControlByteCommand();
-    ESP_ERROR_CHECK(AppendSetDisplayOnOff(false));
-    ESP_ERROR_CHECK(AppendSetContrastControl(0x7F));
-    ESP_ERROR_CHECK(AppendEntireDisplayOn(false));
-    ESP_ERROR_CHECK(AppendSetNormalInverseDisplay(configuration.InvertColors));
-    ESP_ERROR_CHECK(AppendDeactivateScroll());
-    ESP_ERROR_CHECK(AppendSetLowerColumnStartAddress(0));
-    ESP_ERROR_CHECK(AppendSetHigherColumnStartAddress(0));
-    ESP_ERROR_CHECK(AppendSetMemoryAddressingMode(0b10));
-    ESP_ERROR_CHECK(AppendSetPageStartAddress(0));
-    ESP_ERROR_CHECK(AppendSetDisplayStartLine(0));
-    ESP_ERROR_CHECK(AppendSetSegmentRemap(configuration.FlipRendering));
-    ESP_ERROR_CHECK(AppendSetMultiplexRatio(0b00111111));
-    ESP_ERROR_CHECK(AppendSetComOutputScanDirection(configuration.FlipRendering));
-    ESP_ERROR_CHECK(AppendSetDisplayOffset(0));
-    ESP_ERROR_CHECK(AppendSetComPins(true, false));
-    ESP_ERROR_CHECK(AppendSetDisplayClockDivideRatioAndOscillatorFrequency(0b0000, 0b1000));
-    ESP_ERROR_CHECK(AppendSetPreChargePeriod(0x2, 0x2));
-    ESP_ERROR_CHECK(AppendSetVComHDeselectLevel(0b010));
-    ESP_ERROR_CHECK(AppendChargePumpSetting(true));
-    ESP_ERROR_CHECK(AppendSetDisplayOnOff(true));
+    ESP_ERROR_PROPAGATE(AppendSetDisplayOnOff(false));
+    ESP_ERROR_PROPAGATE(AppendSetContrastControl(0x7F));
+    ESP_ERROR_PROPAGATE(AppendEntireDisplayOn(false));
+    ESP_ERROR_PROPAGATE(AppendSetNormalInverseDisplay(invertColors));
+    ESP_ERROR_PROPAGATE(AppendDeactivateScroll());
+    ESP_ERROR_PROPAGATE(AppendSetLowerColumnStartAddress(0));
+    ESP_ERROR_PROPAGATE(AppendSetHigherColumnStartAddress(0));
+    ESP_ERROR_PROPAGATE(AppendSetMemoryAddressingMode(0b10));
+    ESP_ERROR_PROPAGATE(AppendSetPageStartAddress(0));
+    ESP_ERROR_PROPAGATE(AppendSetDisplayStartLine(0));
+    ESP_ERROR_PROPAGATE(AppendSetSegmentRemap(flipRendering));
+    ESP_ERROR_PROPAGATE(AppendSetMultiplexRatio(0b00111111));
+    ESP_ERROR_PROPAGATE(AppendSetComOutputScanDirection(flipRendering));
+    ESP_ERROR_PROPAGATE(AppendSetDisplayOffset(0));
+    ESP_ERROR_PROPAGATE(AppendSetComPins(true, false));
+    ESP_ERROR_PROPAGATE(AppendSetDisplayClockDivideRatioAndOscillatorFrequency(0b0000, 0b1000));
+    ESP_ERROR_PROPAGATE(AppendSetPreChargePeriod(0x2, 0x2));
+    ESP_ERROR_PROPAGATE(AppendSetVComHDeselectLevel(0b010));
+    ESP_ERROR_PROPAGATE(AppendChargePumpSetting(true));
+    ESP_ERROR_PROPAGATE(AppendSetDisplayOnOff(true));
 
-    ESP_ERROR_CHECK(FlushCommandBuffer());
+    ESP_ERROR_PROPAGATE(FlushCommandBuffer());
+
+    return ESP_OK;
 }
 
 /**

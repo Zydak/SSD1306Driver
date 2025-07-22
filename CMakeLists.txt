@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.8)
-set(CMAKE_CXX_STANDARD 17)
+cmake_minimum_required(VERSION 3.20)
+set(CMAKE_CXX_STANDARD 23)
 
 file(GLOB SOURCES "./Source/*.cpp")
 
@@ -8,3 +8,4 @@ idf_component_register(
     PRIV_REQUIRES driver
     INCLUDE_DIRS "./Include"
 )
+target_compile_options(${COMPONENT_LIB} PRIVATE -std=gnu++23)
