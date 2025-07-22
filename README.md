@@ -1,7 +1,7 @@
 # SSD1306Driver
 ![photo_2025-07-20_11-48-32](https://github.com/user-attachments/assets/b3b9ce14-04b4-4e04-af10-eb70784b485e)
 
-Simple and extensible SSD1306 OLED 128x64 display driver for ESP32 written in C++ 17 using ESP-IDF. It handles I2C bus and the display through easy to work with SSD1306Driver object.
+Simple and extensible SSD1306 OLED 128x64 display driver for ESP32 written in C++ 23 using ESP-IDF. It handles I2C bus and the display through easy to work with SSD1306Driver object.
 
 ## Usage
 1. Clean your project with 
