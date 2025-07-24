@@ -133,13 +133,13 @@ High level methods are functions that allow you to interface with SSD1306 displa
 
 `WriteToPage(uint8_t page, const void* data, uint8_t size, uint8_t offset)`: Writes raw byte data directly to a specific page in the buffer at the given offset, useful for writing pre-formatted bitmap data.
 
-`WriteToColumn(uint8_t page, uint8_t column, uint8_t data, bool setOrClear)`: Writes a single byte to a specific column within a page, with the option to either overwrite existing data or combine it using bitwise OR.
+`WriteToColumn(uint8_t page, uint8_t column, uint8_t data, bool setOrClear)`: Writes a single byte to a specific column within a page, with the option to either write or clear data.
 
 `WriteToPixel(uint8_t x, uint8_t y, bool value)`: Sets or clears an individual pixel at the specified coordinates, providing precise control over single pixel manipulation.
 
-`DrawData(uint8_t x, uint8_t y, uint8_t width, uint8_t height, const uint8_t* data, bool invertColors, bool setOrClear)`: Renders a rectangular block of bitmap data to the display buffer at the specified position, with options to invert colors and control how the data is combined with existing pixels.
+`DrawData(uint8_t x, uint8_t y, uint8_t width, uint8_t height, const uint8_t* data, bool invertColors, bool setOrClear)`: Renders a rectangular block of bitmap data to the display buffer at the specified position, with options to write or clear data.
 
-`DrawText(uint8_t x, uint8_t y, const std::string& text, bool invertColors, bool setOrClear)`: Renders ASCII text using a built-in 8x8 pixel font, supporting special characters like newlines, tabs, and spaces, with options for color inversion and pixel combination modes.
+`DrawText(uint8_t x, uint8_t y, const std::string& text, bool invertColors, bool setOrClear)`: Renders ASCII text using a built-in 8x8 pixel font, supporting special characters like newlines, tabs, and spaces, with options for color inversion and writing or clearing data.
 
 `DrawTextCentered(uint8_t y, const std::string& text, bool invertColors, bool setOrClear)`: Renders ASCII text horizontally centered on the display at the specified vertical position, automatically calculating the proper x-coordinate for center alignment.
 

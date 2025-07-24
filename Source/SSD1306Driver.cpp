@@ -213,6 +213,12 @@ SSD1306Driver &SSD1306Driver::operator=(SSD1306Driver &&other)
     m_Pages = std::move(other.m_Pages);
     m_CommandBuffer = std::move(other.m_CommandBuffer);
 
+    if (m_I2CHandle != nullptr)
+        i2c_master_bus_rm_device(m_I2CHandle);
+
+    if (m_I2CBusHandle != nullptr)
+        i2c_del_master_bus(m_I2CBusHandle);
+
     m_I2CBusHandle = other.m_I2CBusHandle;
     other.m_I2CBusHandle = nullptr;
     m_I2CHandle = other.m_I2CHandle;
