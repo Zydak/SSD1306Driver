@@ -6,6 +6,7 @@
 #include <cstring>
 #include <math.h>
 #include "esp_log.h"
+#include <driver/i2c_master.h>
 
 #define TAG "SSD1306Driver"
 
@@ -162,7 +163,7 @@ static const uint8_t s_ASCIIPixelData[128][8] = {
 /**
  * @brief Initializes the SSD1306Driver object.
  *
- * @param configuration  Reference to a SSD1306DriverConfiguration struct containing:
+ * @param configuration  Reference to a Configuration struct containing:
  *   - I2CPort: I2C port number to use for communication.
  *   - SclIO: GPIO number for the I2C SCL line.
  *   - SdaIO: GPIO number for the I2C SDA line.
@@ -170,32 +171,32 @@ static const uint8_t s_ASCIIPixelData[128][8] = {
  *
  * @return expected with SSD1306Driver if successful, esp_err_t otherwise.
  */
-std::expected<SSD1306Driver, esp_err_t> SSD1306Driver::New(const SSD1306DriverConfiguration &configuration)
+std::expected<SSD1306Driver, esp_err_t> SSD1306Driver::New(const Configuration &configuration)
 {
     i2c_master_bus_config_t busConfig = {};
-   busConfig.clk_source = I2C_CLK_SRC_DEFAULT;
-   busConfig.glitch_ignore_cnt = 7;
-   busConfig.i2c_port = configuration.I2CPort;
-   busConfig.scl_io_num = configuration.SclIO;
-   busConfig.sda_io_num = configuration.SdaIO;
-   busConfig.flags.enable_internal_pullup = true;
-   i2c_master_bus_handle_t busHandle;
-   i2c_master_dev_handle_t devHandle;
+    busConfig.clk_source = I2C_CLK_SRC_DEFAULT;
+    busConfig.glitch_ignore_cnt = 7;
+    busConfig.i2c_port = configuration.I2CPort;
+    busConfig.scl_io_num = (gpio_num_t)configuration.SclIO;
+    busConfig.sda_io_num = (gpio_num_t)configuration.SdaIO;
+    busConfig.flags.enable_internal_pullup = true;
+    i2c_master_bus_handle_t busHandle;
+    i2c_master_dev_handle_t devHandle;
 
-   ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_new_master_bus(&busConfig, &busHandle));
-   ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_master_probe(busHandle, 0x3C, 5000 / portTICK_PERIOD_MS));
-   i2c_device_config_t I2CDeviceConfig{};
-   I2CDeviceConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-   I2CDeviceConfig.device_address = 0x3C;
-   I2CDeviceConfig.scl_speed_hz = configuration.I2CSclSpeedHz;
-   ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_master_bus_add_device(busHandle, &I2CDeviceConfig, &devHandle));
+    ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_new_master_bus(&busConfig, &busHandle));
+    ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_master_probe(busHandle, 0x3C, 5000 / portTICK_PERIOD_MS));
+    i2c_device_config_t I2CDeviceConfig{};
+    I2CDeviceConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    I2CDeviceConfig.device_address = 0x3C;
+    I2CDeviceConfig.scl_speed_hz = configuration.I2CSclSpeedHz;
+    ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_master_bus_add_device(busHandle, &I2CDeviceConfig, &devHandle));
 
-   std::vector<uint8_t> commandBuffer;
-   commandBuffer.reserve(256);
+    std::vector<uint8_t> commandBuffer;
+    commandBuffer.reserve(256);
 
-   SSD1306Driver::Pages pages{};
+    SSD1306Driver::Pages pages{};
 
-   return SSD1306Driver(std::move(pages), std::move(busHandle), std::move(devHandle), std::move(commandBuffer));
+    return SSD1306Driver(std::move(pages), std::move(busHandle), std::move(devHandle), std::move(commandBuffer));
 }
 
 SSD1306Driver::SSD1306Driver(SSD1306Driver &&other)

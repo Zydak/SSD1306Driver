@@ -1,6 +1,5 @@
 #pragma once
 
-#include <driver/i2c_master.h>
 #include "esp_err.h"
 
 #include <vector>
@@ -8,18 +7,22 @@
 #include <string>
 #include <expected>
 
+typedef struct i2c_master_bus_t *i2c_master_bus_handle_t;
+typedef struct i2c_master_dev_t *i2c_master_dev_handle_t;
+typedef int i2c_port_num_t;
+
 class SSD1306Driver
 {
 public:
-    struct SSD1306DriverConfiguration
+    struct Configuration
     {
-        i2c_port_num_t I2CPort = I2C_NUM_0;
-        gpio_num_t SdaIO = GPIO_NUM_10;
-        gpio_num_t SclIO = GPIO_NUM_11;
+        i2c_port_num_t I2CPort = 0;
+        int SdaIO = 10;
+        int SclIO = 11;
         uint32_t I2CSclSpeedHz = 400000;
     };
 
-    [[nodiscard]] static std::expected<SSD1306Driver, esp_err_t> New(const SSD1306DriverConfiguration& configuration);
+    [[nodiscard]] static std::expected<SSD1306Driver, esp_err_t> New(const Configuration& configuration);
 
     SSD1306Driver(const SSD1306Driver& other) = delete;
     SSD1306Driver& operator=(const SSD1306Driver& other) = delete;

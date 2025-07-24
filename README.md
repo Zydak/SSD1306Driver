@@ -16,14 +16,7 @@ idf.py add-dependency --path application --git https://github.com/Zydak/SSD1306D
 ```
 idf.py update-dependencies
 ```
-4. SSD1306Driver relies on `driver` module so you might also need to add driver PRIV_REQUIRES to your main project like so:
-```
-idf_component_register(
-    SRCS "main.cpp"
-    PRIV_REQUIRES driver <- This
-)
-```
-5. Build
+4. Build
 ```
 idf.py build
 ```
@@ -78,10 +71,10 @@ void DrawStar(SSD1306Driver& driver, int centerX, int centerY, int radius, int r
 
 extern "C" void app_main(void)
 {
-   SSD1306Driver::SSD1306DriverConfiguration configuration{};
-   configuration.I2CPort = I2C_NUM_0;
-   configuration.SclIO = GPIO_NUM_11;
-   configuration.SdaIO = GPIO_NUM_10;
+   SSD1306Driver::Configuration configuration{};
+   configuration.I2CPort = 0;
+   configuration.SclIO = 11;
+   configuration.SdaIO = 10;
    configuration.I2CSclSpeedHz = 400000;
 
    SSD1306Driver driver = SSD1306Driver::New(configuration).value();
@@ -95,9 +88,9 @@ extern "C" void app_main(void)
       ESP_ERROR_CHECK(driver.DrawLine(0, 45, 127, 45, true));
       ESP_ERROR_CHECK(driver.DrawData(0, 0, 32, 32, (uint8_t*)&githubLogo, i % 20 > 10, true));
 
-      DrawStar(driver, 50,  10, 10, 0 + i * 15);
+      DrawStar(driver, 50,  10, 10, 0 - i * 15);
       DrawStar(driver, 70,  20, 10, 45 + i * 15);
-      DrawStar(driver, 90,  10, 10, 180 + i * 15);
+      DrawStar(driver, 90,  10, 10, 180 - i * 15);
       DrawStar(driver, 110, 20, 10, 90 + i * 15);
 
       ESP_ERROR_CHECK(driver.DrawRectangle(0, 55, 128, 9, true, true));
