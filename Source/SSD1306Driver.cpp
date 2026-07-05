@@ -1,10 +1,5 @@
 #include "SSD1306Driver.h"
 
-
-#include <freertos/FreeRTOS.h>
-
-#include <cstring>
-#include <math.h>
 #include "esp_log.h"
 #include <driver/i2c_master.h>
 
@@ -152,14 +147,6 @@ static const uint8_t s_ASCIIPixelData[128][8] = {
         }\
     }
 
-#define ESP_ERROR_PROPAGATE_UNEXPECTED(func, ...)\
-    {\
-        esp_err_t result = func;\
-        if (result != ESP_OK){\
-            return std::unexpected(result);\
-        }\
-    }
-
 /**
  * @brief Initializes the SSD1306Driver object.
  *
@@ -169,9 +156,9 @@ static const uint8_t s_ASCIIPixelData[128][8] = {
  *   - SdaIO: GPIO number for the I2C SDA line.
  *   - I2CSclSpeedHz: I2C clock speed in Hz.
  *
- * @return expected with SSD1306Driver if successful, esp_err_t otherwise.
+ * @return ESP_OK on success, ESP error code otherwise.
  */
-std::expected<SSD1306Driver, esp_err_t> SSD1306Driver::New(const Configuration &configuration)
+esp_err_t SSD1306Driver::New(const Configuration &configuration, SSD1306Driver &outDriver)
 {
     i2c_master_bus_config_t busConfig = {};
     busConfig.clk_source = I2C_CLK_SRC_DEFAULT;
@@ -180,30 +167,51 @@ std::expected<SSD1306Driver, esp_err_t> SSD1306Driver::New(const Configuration &
     busConfig.scl_io_num = (gpio_num_t)configuration.SclIO;
     busConfig.sda_io_num = (gpio_num_t)configuration.SdaIO;
     busConfig.flags.enable_internal_pullup = true;
-    i2c_master_bus_handle_t busHandle;
-    i2c_master_dev_handle_t devHandle;
+    i2c_master_bus_handle_t busHandle = nullptr;
+    i2c_master_dev_handle_t devHandle = nullptr;
 
-    ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_new_master_bus(&busConfig, &busHandle));
-    ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_master_probe(busHandle, 0x3C, 5000 / portTICK_PERIOD_MS));
+    esp_err_t result = i2c_new_master_bus(&busConfig, &busHandle);
+    if (result != ESP_OK)
+        return result;
+
+    result = i2c_master_probe(busHandle, 0x3C, 5000);
+    if (result != ESP_OK)
+    {
+        i2c_del_master_bus(busHandle);
+        return result;
+    }
+
     i2c_device_config_t I2CDeviceConfig{};
     I2CDeviceConfig.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     I2CDeviceConfig.device_address = 0x3C;
     I2CDeviceConfig.scl_speed_hz = configuration.I2CSclSpeedHz;
-    ESP_ERROR_PROPAGATE_UNEXPECTED(i2c_master_bus_add_device(busHandle, &I2CDeviceConfig, &devHandle));
+    result = i2c_master_bus_add_device(busHandle, &I2CDeviceConfig, &devHandle);
+    if (result != ESP_OK)
+    {
+        i2c_del_master_bus(busHandle);
+        return result;
+    }
 
-    std::vector<uint8_t> commandBuffer;
-    commandBuffer.reserve(256);
+    if (outDriver.m_I2CHandle != nullptr)
+        i2c_master_bus_rm_device(outDriver.m_I2CHandle);
 
-    SSD1306Driver::Pages pages{};
+    if (outDriver.m_I2CBusHandle != nullptr)
+        i2c_del_master_bus(outDriver.m_I2CBusHandle);
 
-    return SSD1306Driver(std::move(pages), std::move(busHandle), std::move(devHandle), std::move(commandBuffer));
+    outDriver.m_I2CBusHandle = busHandle;
+    outDriver.m_I2CHandle = devHandle;
+    outDriver.m_CommandBuffer.Clear();
+    ESP_ERROR_PROPAGATE(outDriver.m_Pages.Clear());
+
+    return ESP_OK;
 }
 
 SSD1306Driver::SSD1306Driver(SSD1306Driver &&other)
-    : m_Pages{std::move(other.m_Pages)}, m_I2CBusHandle(other.m_I2CBusHandle), m_I2CHandle(other.m_I2CHandle), m_CommandBuffer(std::move(other.m_CommandBuffer))
+    : m_Pages(other.m_Pages), m_I2CBusHandle(other.m_I2CBusHandle), m_I2CHandle(other.m_I2CHandle), m_CommandBuffer(other.m_CommandBuffer)
 {
     other.m_I2CBusHandle = nullptr;
     other.m_I2CHandle = nullptr;
+    other.m_CommandBuffer.Clear();
 }
 
 SSD1306Driver &SSD1306Driver::operator=(SSD1306Driver &&other)
@@ -211,8 +219,8 @@ SSD1306Driver &SSD1306Driver::operator=(SSD1306Driver &&other)
     if (this == &other)
         return *this;
 
-    m_Pages = std::move(other.m_Pages);
-    m_CommandBuffer = std::move(other.m_CommandBuffer);
+    m_Pages = other.m_Pages;
+    m_CommandBuffer = other.m_CommandBuffer;
 
     if (m_I2CHandle != nullptr)
         i2c_master_bus_rm_device(m_I2CHandle);
@@ -224,6 +232,7 @@ SSD1306Driver &SSD1306Driver::operator=(SSD1306Driver &&other)
     other.m_I2CBusHandle = nullptr;
     m_I2CHandle = other.m_I2CHandle;
     other.m_I2CHandle = nullptr;
+    other.m_CommandBuffer.Clear();
 
     return *this;
 }
@@ -285,12 +294,18 @@ esp_err_t SSD1306Driver::SendInitializationSequence(bool flipRendering, bool inv
  */
 esp_err_t SSD1306Driver::FlushCommandBuffer()
 {
-    if (m_CommandBuffer.empty()) {
+    if (m_CommandBuffer.IsEmpty()) {
         return ESP_OK;
     }
 
-    esp_err_t ret = i2c_master_transmit(m_I2CHandle, m_CommandBuffer.data(), m_CommandBuffer.size(), 1000 / portTICK_PERIOD_MS);
-    m_CommandBuffer.clear();
+    if (m_CommandBuffer.HasOverflowed())
+    {
+        m_CommandBuffer.Clear();
+        return ESP_ERR_NO_MEM;
+    }
+
+    esp_err_t ret = i2c_master_transmit(m_I2CHandle, m_CommandBuffer.Data(), m_CommandBuffer.Size(), 1000);
+    m_CommandBuffer.Clear();
 
     return ret;
 }
@@ -302,7 +317,7 @@ esp_err_t SSD1306Driver::FlushCommandBuffer()
  */
 void SSD1306Driver::AppendControlByteCommand()
 {
-    m_CommandBuffer.emplace_back(0x00);
+    m_CommandBuffer.PushBack(0x00);
 }
 
 /**
@@ -312,7 +327,7 @@ void SSD1306Driver::AppendControlByteCommand()
  */
 void SSD1306Driver::AppendControlByteData()
 {
-    m_CommandBuffer.emplace_back(0x40);
+    m_CommandBuffer.PushBack(0x40);
 }
 
 /**
@@ -326,8 +341,8 @@ void SSD1306Driver::AppendControlByteData()
  */
 esp_err_t SSD1306Driver::AppendChargePumpSetting(bool enable)
 {
-    m_CommandBuffer.emplace_back(0x8D);
-    m_CommandBuffer.emplace_back(0b00010000 | (enable << 2));
+    m_CommandBuffer.PushBack(0x8D);
+    m_CommandBuffer.PushBack(0b00010000 | (enable << 2));
     return ESP_OK;
 }
 
@@ -342,8 +357,8 @@ esp_err_t SSD1306Driver::AppendChargePumpSetting(bool enable)
  */
 esp_err_t SSD1306Driver::AppendSetContrastControl(uint8_t contrast)
 {
-    m_CommandBuffer.emplace_back(0x81);
-    m_CommandBuffer.emplace_back(contrast);
+    m_CommandBuffer.PushBack(0x81);
+    m_CommandBuffer.PushBack(contrast);
     return ESP_OK;
 }
 
@@ -358,7 +373,7 @@ esp_err_t SSD1306Driver::AppendSetContrastControl(uint8_t contrast)
  */
 esp_err_t SSD1306Driver::AppendEntireDisplayOn(bool on)
 {
-    m_CommandBuffer.emplace_back(0b10100100 | on);
+    m_CommandBuffer.PushBack(0b10100100 | on);
     return ESP_OK;
 }
 
@@ -373,7 +388,7 @@ esp_err_t SSD1306Driver::AppendEntireDisplayOn(bool on)
  */
 esp_err_t SSD1306Driver::AppendSetNormalInverseDisplay(bool invert)
 {
-    m_CommandBuffer.emplace_back(0b10100110 | invert);
+    m_CommandBuffer.PushBack(0b10100110 | invert);
     return ESP_OK;
 }
 
@@ -388,7 +403,7 @@ esp_err_t SSD1306Driver::AppendSetNormalInverseDisplay(bool invert)
  */
 esp_err_t SSD1306Driver::AppendSetDisplayOnOff(bool on)
 {
-    m_CommandBuffer.emplace_back(0b10101110 | on);
+    m_CommandBuffer.PushBack(0b10101110 | on);
     return ESP_OK;
 }
 
@@ -422,13 +437,13 @@ esp_err_t SSD1306Driver::AppendContinuousHorizontalScrollSetup(bool leftHorizont
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b00100110 | leftHorizontalScroll);
-    m_CommandBuffer.emplace_back(0x00); // Dummy byte
-    m_CommandBuffer.emplace_back(startPageAddress);
-    m_CommandBuffer.emplace_back(timeInterval);
-    m_CommandBuffer.emplace_back(endPageAddress);
-    m_CommandBuffer.emplace_back(0x00); // Dummy byte
-    m_CommandBuffer.emplace_back(0xFF); // Dummy byte
+    m_CommandBuffer.PushBack(0b00100110 | leftHorizontalScroll);
+    m_CommandBuffer.PushBack(0x00); // Dummy byte
+    m_CommandBuffer.PushBack(startPageAddress);
+    m_CommandBuffer.PushBack(timeInterval);
+    m_CommandBuffer.PushBack(endPageAddress);
+    m_CommandBuffer.PushBack(0x00); // Dummy byte
+    m_CommandBuffer.PushBack(0xFF); // Dummy byte
 
     return ESP_OK;
 }
@@ -473,12 +488,12 @@ esp_err_t SSD1306Driver::AppendContinuousVerticalAndHorizontalScrollSetup(uint8_
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b00101000 | direction);
-    m_CommandBuffer.emplace_back(0x00); // Dummy byte
-    m_CommandBuffer.emplace_back(startPageAddress);
-    m_CommandBuffer.emplace_back(timeInterval);
-    m_CommandBuffer.emplace_back(endPageAddress);
-    m_CommandBuffer.emplace_back(verticalScrollingOffset);
+    m_CommandBuffer.PushBack(0b00101000 | direction);
+    m_CommandBuffer.PushBack(0x00); // Dummy byte
+    m_CommandBuffer.PushBack(startPageAddress);
+    m_CommandBuffer.PushBack(timeInterval);
+    m_CommandBuffer.PushBack(endPageAddress);
+    m_CommandBuffer.PushBack(verticalScrollingOffset);
 
     return ESP_OK;
 }
@@ -492,7 +507,7 @@ esp_err_t SSD1306Driver::AppendContinuousVerticalAndHorizontalScrollSetup(uint8_
  */
 esp_err_t SSD1306Driver::AppendDeactivateScroll()
 {
-    m_CommandBuffer.emplace_back(0b00101110);
+    m_CommandBuffer.PushBack(0b00101110);
 
     return ESP_OK;
 }
@@ -506,7 +521,7 @@ esp_err_t SSD1306Driver::AppendDeactivateScroll()
  */
 esp_err_t SSD1306Driver::AppendActivateScroll()
 {
-    m_CommandBuffer.emplace_back(0b00101111);
+    m_CommandBuffer.PushBack(0b00101111);
 
     return ESP_OK;
 }
@@ -534,9 +549,9 @@ esp_err_t SSD1306Driver::AppendSetVerticalScrollArea(uint8_t numberOfRowsFixed, 
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b10100011);
-    m_CommandBuffer.emplace_back(numberOfRowsFixed);
-    m_CommandBuffer.emplace_back(numberOfRowsScroll);
+    m_CommandBuffer.PushBack(0b10100011);
+    m_CommandBuffer.PushBack(numberOfRowsFixed);
+    m_CommandBuffer.PushBack(numberOfRowsScroll);
 
     return ESP_OK;
 }
@@ -558,7 +573,7 @@ esp_err_t SSD1306Driver::AppendSetLowerColumnStartAddress(uint8_t addressLow)
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b00000000 | addressLow);
+    m_CommandBuffer.PushBack(0b00000000 | addressLow);
 
     return ESP_OK;
 }
@@ -580,7 +595,7 @@ esp_err_t SSD1306Driver::AppendSetHigherColumnStartAddress(uint8_t addressHigh)
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b00010000 | addressHigh);
+    m_CommandBuffer.PushBack(0b00010000 | addressHigh);
 
     return ESP_OK;
 }
@@ -606,8 +621,8 @@ esp_err_t SSD1306Driver::AppendSetMemoryAddressingMode(uint8_t mode)
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b00100000);
-    m_CommandBuffer.emplace_back(mode);
+    m_CommandBuffer.PushBack(0b00100000);
+    m_CommandBuffer.PushBack(mode);
 
     return ESP_OK;
 }
@@ -636,9 +651,9 @@ esp_err_t SSD1306Driver::AppendSetColumnAddress(uint8_t startAddress, uint8_t en
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b00100001);
-    m_CommandBuffer.emplace_back(startAddress);
-    m_CommandBuffer.emplace_back(endAddress);
+    m_CommandBuffer.PushBack(0b00100001);
+    m_CommandBuffer.PushBack(startAddress);
+    m_CommandBuffer.PushBack(endAddress);
 
     return ESP_OK;
 }
@@ -667,9 +682,9 @@ esp_err_t SSD1306Driver::AppendSetPageAddress(uint8_t startAddress, uint8_t endA
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b00100010);
-    m_CommandBuffer.emplace_back(startAddress);
-    m_CommandBuffer.emplace_back(endAddress);
+    m_CommandBuffer.PushBack(0b00100010);
+    m_CommandBuffer.PushBack(startAddress);
+    m_CommandBuffer.PushBack(endAddress);
     
     return ESP_OK;
 }
@@ -691,7 +706,7 @@ esp_err_t SSD1306Driver::AppendSetPageStartAddress(uint8_t address)
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b10110000 | address);
+    m_CommandBuffer.PushBack(0b10110000 | address);
     
     return ESP_OK;
 }
@@ -713,7 +728,7 @@ esp_err_t SSD1306Driver::AppendSetDisplayStartLine(uint8_t line)
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b01000000 | line);
+    m_CommandBuffer.PushBack(0b01000000 | line);
     
     return ESP_OK;
 }
@@ -730,7 +745,7 @@ esp_err_t SSD1306Driver::AppendSetDisplayStartLine(uint8_t line)
  */
 esp_err_t SSD1306Driver::AppendSetSegmentRemap(bool remapLeftToRight)
 {
-    m_CommandBuffer.emplace_back(0b10100000 | remapLeftToRight);
+    m_CommandBuffer.PushBack(0b10100000 | remapLeftToRight);
     
     return ESP_OK;
 }
@@ -753,8 +768,8 @@ esp_err_t SSD1306Driver::AppendSetMultiplexRatio(uint8_t ratio)
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b10101000);
-    m_CommandBuffer.emplace_back(ratio);
+    m_CommandBuffer.PushBack(0b10101000);
+    m_CommandBuffer.PushBack(ratio);
     
     return ESP_OK;
 }
@@ -771,7 +786,7 @@ esp_err_t SSD1306Driver::AppendSetMultiplexRatio(uint8_t ratio)
  */
 esp_err_t SSD1306Driver::AppendSetComOutputScanDirection(bool remapTopToBottom)
 {
-    m_CommandBuffer.emplace_back(0b11000000 | (remapTopToBottom << 3));
+    m_CommandBuffer.PushBack(0b11000000 | (remapTopToBottom << 3));
     
     return ESP_OK;
 }
@@ -794,8 +809,8 @@ esp_err_t SSD1306Driver::AppendSetDisplayOffset(uint8_t offset)
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b11010011);
-    m_CommandBuffer.emplace_back(offset);
+    m_CommandBuffer.PushBack(0b11010011);
+    m_CommandBuffer.PushBack(offset);
     
     return ESP_OK;
 }
@@ -814,8 +829,8 @@ esp_err_t SSD1306Driver::AppendSetDisplayOffset(uint8_t offset)
  */
 esp_err_t SSD1306Driver::AppendSetComPins(bool alternative, bool remap)
 {
-    m_CommandBuffer.emplace_back(0b11011010);
-    m_CommandBuffer.emplace_back(0b00000010 | (alternative << 4) | (remap << 5));
+    m_CommandBuffer.PushBack(0b11011010);
+    m_CommandBuffer.PushBack(0b00000010 | (alternative << 4) | (remap << 5));
     
     return ESP_OK;
 }
@@ -845,8 +860,8 @@ esp_err_t SSD1306Driver::AppendSetDisplayClockDivideRatioAndOscillatorFrequency(
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b11010101);
-    m_CommandBuffer.emplace_back((divideRatio) | (oscillatorFrequency << 4));
+    m_CommandBuffer.PushBack(0b11010101);
+    m_CommandBuffer.PushBack((divideRatio) | (oscillatorFrequency << 4));
     
     return ESP_OK;
 }
@@ -874,8 +889,8 @@ esp_err_t SSD1306Driver::AppendSetPreChargePeriod(uint8_t phase1, uint8_t phase2
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b11011001);
-    m_CommandBuffer.emplace_back((phase1) | (phase2 << 4));
+    m_CommandBuffer.PushBack(0b11011001);
+    m_CommandBuffer.PushBack((phase1) | (phase2 << 4));
 
     return ESP_OK;
 }
@@ -900,8 +915,8 @@ esp_err_t SSD1306Driver::AppendSetVComHDeselectLevel(uint8_t level)
         return ESP_FAIL;
     }
 
-    m_CommandBuffer.emplace_back(0b11011011);
-    m_CommandBuffer.emplace_back(level << 4);
+    m_CommandBuffer.PushBack(0b11011011);
+    m_CommandBuffer.PushBack(level << 4);
 
     return ESP_OK;
 }
@@ -915,7 +930,7 @@ esp_err_t SSD1306Driver::AppendSetVComHDeselectLevel(uint8_t level)
  */
 esp_err_t SSD1306Driver::AppendNOP()
 {
-    m_CommandBuffer.emplace_back(0b11100011);
+    m_CommandBuffer.PushBack(0b11100011);
 
     return ESP_OK;
 }
@@ -961,7 +976,7 @@ esp_err_t SSD1306Driver::WritePageToRam(uint8_t page)
     if (!m_Pages.IsPageDirty(page))
         return ESP_OK;
     
-    if (m_CommandBuffer.size() > 0)
+    if (m_CommandBuffer.Size() > 0)
     {
         ESP_LOGE(TAG, "You have to flush the command buffer before writing to RAM!");
         return ESP_FAIL;
@@ -974,7 +989,7 @@ esp_err_t SSD1306Driver::WritePageToRam(uint8_t page)
 
     ESP_ERROR_PROPAGATE(FlushCommandBuffer());
     
-    ESP_ERROR_PROPAGATE(i2c_master_transmit(m_I2CHandle, m_Pages.GetPagePtr(page), PAGE_SIZE, 1000 / portTICK_PERIOD_MS));
+    ESP_ERROR_PROPAGATE(i2c_master_transmit(m_I2CHandle, m_Pages.GetPagePtr(page), PAGE_SIZE, 1000));
     m_Pages.UnmarkPageAsDirty(page);
 
     return ESP_OK;
@@ -994,9 +1009,15 @@ esp_err_t SSD1306Driver::WritePageToRam(uint8_t page)
  */
 esp_err_t SSD1306Driver::WriteColumnsToRam(uint8_t page, uint8_t startColumn, uint8_t endColumn)
 {
-    if (m_CommandBuffer.size() > 0)
+    if (m_CommandBuffer.Size() > 0)
     {
         ESP_LOGE(TAG, "You have to flush the command buffer before writing to RAM!");
+        return ESP_FAIL;
+    }
+
+    if (startColumn > endColumn || endColumn >= DISPLAY_WIDTH)
+    {
+        ESP_LOGE(TAG, "Column range is out of bounds: start=%d end=%d", (int)startColumn, (int)endColumn);
         return ESP_FAIL;
     }
 
@@ -1008,11 +1029,11 @@ esp_err_t SSD1306Driver::WriteColumnsToRam(uint8_t page, uint8_t startColumn, ui
     ESP_ERROR_PROPAGATE(FlushCommandBuffer());
     
     uint8_t columnCount = endColumn - startColumn + 1;
-    uint8_t dataCommand[columnCount + 1];
+    uint8_t dataCommand[PAGE_SIZE];
     dataCommand[0] = 0x40; // Data control byte
     memcpy(&dataCommand[1], m_Pages.GetColumnPtr(page, startColumn), columnCount);
 
-    ESP_ERROR_PROPAGATE(i2c_master_transmit(m_I2CHandle, dataCommand, sizeof(dataCommand), 1000 / portTICK_PERIOD_MS));
+    ESP_ERROR_PROPAGATE(i2c_master_transmit(m_I2CHandle, dataCommand, columnCount + 1, 1000));
 
     return ESP_OK;
 }
@@ -1102,12 +1123,14 @@ esp_err_t SSD1306Driver::DrawData(uint8_t x, uint8_t y, uint8_t width, uint8_t h
     uint8_t baseColumn = x;
     uint8_t yOffset = y % 8;
 
-    for (uint8_t page = 0; page < std::ceil(float(height) / float(8)); page++)
+    uint8_t pagesToDraw = (height + 7) / 8;
+    for (uint8_t page = 0; page < pagesToDraw; page++)
     {
         if (basePage + page >= 8)
             break;
         
-        uint8_t heightToDraw = std::min(8, height - (page * 8));
+        uint8_t heightRemaining = height - (page * 8);
+        uint8_t heightToDraw = (heightRemaining > 8) ? 8 : heightRemaining;
 
         for (uint8_t column = 0; column < width; column++)
         {
@@ -1153,12 +1176,15 @@ esp_err_t SSD1306Driver::DrawData(uint8_t x, uint8_t y, uint8_t width, uint8_t h
  * 
  * @return esp_err_t ESP_OK on success.
  */
-esp_err_t SSD1306Driver::DrawText(uint8_t x, uint8_t y, const std::string& text, bool invertColors, bool setOrClear)
+esp_err_t SSD1306Driver::DrawText(uint8_t x, uint8_t y, const char* text, bool invertColors, bool setOrClear)
 {
     if (x >= DISPLAY_WIDTH || y >= DISPLAY_HEIGHT)
         return ESP_OK;
 
-    size_t textLen = text.size();
+    if (text == nullptr)
+        return ESP_FAIL;
+
+    size_t textLen = strlen(text);
 
     uint8_t column = x;
     uint8_t page = y / 8;
@@ -1233,9 +1259,12 @@ esp_err_t SSD1306Driver::DrawText(uint8_t x, uint8_t y, const std::string& text,
  * 
  * @return esp_err_t ESP_OK on success.
  */
-esp_err_t SSD1306Driver::DrawTextCentered(uint8_t y, const std::string &text, bool invertColors, bool setOrClear)
+esp_err_t SSD1306Driver::DrawTextCentered(uint8_t y, const char *text, bool invertColors, bool setOrClear)
 {
-    uint8_t textWidth = text.length() * 8; // each char is 8 columns
+    if (text == nullptr)
+        return ESP_FAIL;
+
+    uint8_t textWidth = strlen(text) * 8; // each char is 8 columns
     if (textWidth >= DISPLAY_WIDTH) {
         return DrawText(0, y, text, invertColors, setOrClear);
     }
@@ -1306,7 +1335,8 @@ esp_err_t SSD1306Driver::DrawRectangle(uint8_t x, uint8_t y, uint8_t width, uint
     {
         for (uint8_t i = 0; i < height; i += 8) // Write entire columns at once so it's faster
         {
-            uint8_t heightToDraw = std::min(height - i, 8);
+            uint8_t heightRemaining = height - i;
+            uint8_t heightToDraw = (heightRemaining > 8) ? 8 : heightRemaining;
             
             uint8_t rowData = 0xFF >> (8 - heightToDraw);
 
@@ -1367,7 +1397,16 @@ const uint8_t *SSD1306Driver::Pages::GetPagePtr(uint8_t page)
         return nullptr;
     }
 
-    return Buffer.data() + (page * PAGE_SIZE);
+    return m_Buffer + (page * PAGE_SIZE);
+}
+
+SSD1306Driver::Pages::Pages()
+{
+    memset(m_Buffer, 0, sizeof(m_Buffer));
+    for (uint8_t page = 0; page < PAGES_COUNT; page++)
+    {
+        m_Buffer[page * PAGE_SIZE] = 0x40;
+    }
 }
 
 /**
@@ -1391,7 +1430,7 @@ const uint8_t *SSD1306Driver::Pages::GetColumnPtr(uint8_t page, uint8_t column)
         return nullptr;
     }
 
-    return Buffer.data() + (page * PAGE_SIZE) + 1 + column;
+    return m_Buffer + (page * PAGE_SIZE) + 1 + column;
 }
 
 /**
@@ -1418,7 +1457,7 @@ esp_err_t SSD1306Driver::Pages::WritePage(uint8_t page, const void* data, uint8_
     }
 
     // + 1 because first byte in the Columns is the control data byte (0x40) not the actual data
-    uint8_t* pagePtr = Buffer.data() + (page * PAGE_SIZE);
+    uint8_t* pagePtr = m_Buffer + (page * PAGE_SIZE);
 
     pagePtr[0] = 0x40; // Set the control byte
     memcpy(pagePtr + 1 + offset, data, size);
@@ -1451,7 +1490,7 @@ esp_err_t SSD1306Driver::Pages::WriteColumn(uint8_t page, uint8_t column, uint8_
         return ESP_FAIL;
     }
 
-    uint8_t* pagePtr = Buffer.data() + (page * PAGE_SIZE);
+    uint8_t* pagePtr = m_Buffer + (page * PAGE_SIZE);
     uint8_t* columnPtr = pagePtr + 1 + column; // + 1 because first byte is control data byte (0x40)
 
     if (setOrClear)
@@ -1484,7 +1523,7 @@ esp_err_t SSD1306Driver::Pages::WritePixel(uint8_t x, uint8_t y, bool value)
     uint8_t page = y / 8;
     uint8_t bit = y % 8;
 
-    uint8_t* pagePtr = Buffer.data() + (page * PAGE_SIZE);
+    uint8_t* pagePtr = m_Buffer + (page * PAGE_SIZE);
     uint8_t* columnPtr = pagePtr + 1 + x; // + 1 because first byte is control data byte (0x40)
 
     if (value) {
@@ -1509,12 +1548,12 @@ esp_err_t SSD1306Driver::Pages::Clear()
 {
     for (uint8_t page = 0; page < PAGES_COUNT; page++)
     {
-        uint8_t* pagePtr = Buffer.data() + (page * PAGE_SIZE);
+        uint8_t* pagePtr = m_Buffer + (page * PAGE_SIZE);
         pagePtr[0] = 0x40; // Control byte
         memset(pagePtr + 1, 0, 128); // Clear data
     }
 
-    DirtyPages |= 0xFF; // Mark all pages as dirty
+    m_DirtyPages |= 0xFF; // Mark all pages as dirty
 
     return ESP_OK;
 }
@@ -1529,7 +1568,7 @@ esp_err_t SSD1306Driver::Pages::Clear()
  */
 esp_err_t SSD1306Driver::Pages::FillPage(uint8_t page, uint8_t value)
 {
-    uint8_t* pagePtr = Buffer.data() + (page * PAGE_SIZE);
+    uint8_t* pagePtr = m_Buffer + (page * PAGE_SIZE);
     memset(pagePtr + 1, value, 128); // Clear data
 
     MarkPageAsDirty(page);
@@ -1546,7 +1585,7 @@ esp_err_t SSD1306Driver::Pages::FillPage(uint8_t page, uint8_t value)
  */
 bool SSD1306Driver::Pages::IsPageDirty(uint8_t page)
 {
-    return (DirtyPages & (1 << page)) > 0;
+    return (m_DirtyPages & (1 << page)) > 0;
 }
 
 /**
@@ -1559,7 +1598,7 @@ bool SSD1306Driver::Pages::IsPageDirty(uint8_t page)
 void SSD1306Driver::Pages::UnmarkPageAsDirty(uint8_t page)
 {
     // Set page bit to 0
-    DirtyPages = DirtyPages & ~(1 << page);
+    m_DirtyPages = m_DirtyPages & ~(1 << page);
 }
 
 /**
@@ -1572,5 +1611,5 @@ void SSD1306Driver::Pages::UnmarkPageAsDirty(uint8_t page)
 void SSD1306Driver::Pages::MarkPageAsDirty(uint8_t page)
 {
     // Set page bit to 1
-    DirtyPages = DirtyPages | (1 << page);
+    m_DirtyPages = m_DirtyPages | (1 << page);
 }

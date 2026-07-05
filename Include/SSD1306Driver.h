@@ -2,10 +2,7 @@
 
 #include "esp_err.h"
 
-#include <vector>
-#include <array>
-#include <string>
-#include <expected>
+#include <stdint.h>
 
 typedef struct i2c_master_bus_t *i2c_master_bus_handle_t;
 typedef struct i2c_master_dev_t *i2c_master_dev_handle_t;
@@ -22,7 +19,9 @@ public:
         uint32_t I2CSclSpeedHz = 400000;
     };
 
-    [[nodiscard]] static std::expected<SSD1306Driver, esp_err_t> New(const Configuration& configuration);
+    SSD1306Driver() = default;
+
+    [[nodiscard]] static esp_err_t New(const Configuration& configuration, SSD1306Driver& outDriver);
 
     SSD1306Driver(const SSD1306Driver& other) = delete;
     SSD1306Driver& operator=(const SSD1306Driver& other) = delete;
@@ -48,8 +47,8 @@ public:
 
     [[nodiscard]] esp_err_t DrawData(uint8_t x, uint8_t y, uint8_t width, uint8_t height, const uint8_t* data, bool invertColors, bool setOrClear);
 
-    [[nodiscard]] esp_err_t DrawText(uint8_t x, uint8_t y, const std::string& text, bool invertColors, bool setOrClear);
-    [[nodiscard]] esp_err_t DrawTextCentered(uint8_t y, const std::string& text, bool invertColors, bool setOrClear);
+    [[nodiscard]] esp_err_t DrawText(uint8_t x, uint8_t y, const char* text, bool invertColors, bool setOrClear);
+    [[nodiscard]] esp_err_t DrawTextCentered(uint8_t y, const char* text, bool invertColors, bool setOrClear);
 
     [[nodiscard]] esp_err_t DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, bool setOrClear);
     [[nodiscard]] esp_err_t DrawRectangle(uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool setOrClear, bool fill);
@@ -108,36 +107,44 @@ private:
     // 129 because the first byte in each page is 0x40 (control data byte) and the rest 128 are columns
     // This allows to send the data through the I2C without any copying and "stitching" the control byte when sending full pages
     static constexpr uint8_t PAGE_SIZE = 129;
+    static constexpr uint8_t COMMAND_BUFFER_SIZE = 64;
+
+    class CommandBuffer
+    {
+    public:
+        bool PushBack(uint8_t value)
+        {
+            if (m_Size >= COMMAND_BUFFER_SIZE)
+            {
+                m_Overflowed = true;
+                return false;
+            }
+
+            m_Data[m_Size] = value;
+            m_Size += 1;
+            return true;
+        }
+
+        [[nodiscard]] bool IsEmpty() const { return m_Size == 0; }
+        [[nodiscard]] uint8_t Size() const { return m_Size; }
+        [[nodiscard]] const uint8_t* Data() const { return m_Data; }
+        [[nodiscard]] bool HasOverflowed() const { return m_Overflowed; }
+        void Clear()
+        {
+            m_Size = 0;
+            m_Overflowed = false;
+        }
+
+    private:
+        uint8_t m_Data[COMMAND_BUFFER_SIZE] = {};
+        uint8_t m_Size = 0;
+        bool m_Overflowed = false;
+    };
 
     class Pages
     {
     public:
-        Pages()
-        {
-            Buffer.resize(PAGE_SIZE * PAGES_COUNT);
-        }
-
-        Pages(const Pages& other) = delete;
-        Pages& operator=(const Pages& other) = delete;
-
-        Pages(Pages&& other) noexcept
-            : Buffer(std::move(other.Buffer)), DirtyPages(other.DirtyPages)
-        {
-            other.DirtyPages = 0;
-        }
-
-        Pages& operator=(Pages&& other) noexcept
-        {
-            if (this == &other)
-                return *this;
-
-            Buffer = std::move(other.Buffer);
-            DirtyPages = other.DirtyPages;
-
-            other.DirtyPages = 0;
-
-            return *this;
-        }
+        Pages();
 
         [[nodiscard]] const uint8_t* GetPagePtr(uint8_t page);
         [[nodiscard]] const uint8_t* GetColumnPtr(uint8_t page, uint8_t column);
@@ -150,17 +157,12 @@ private:
         [[nodiscard]] bool IsPageDirty(uint8_t page);
         void UnmarkPageAsDirty(uint8_t page);
         void MarkPageAsDirty(uint8_t page);
-        [[nodiscard]] uint8_t GetDirtyPagesMask() const { return DirtyPages; }
+        [[nodiscard]] uint8_t GetDirtyPagesMask() const { return m_DirtyPages; }
     private:
 
-        // Store everything in a single continous buffer so it's more memory effiecient
-        std::vector<uint8_t> Buffer; // This can't be array because it causes stack overflow on esp32
-        uint8_t DirtyPages = 0; // Bit field
+        uint8_t m_Buffer[PAGE_SIZE * PAGES_COUNT];
+        uint8_t m_DirtyPages = 0; // Bit field
     };
-
-    SSD1306Driver(Pages&& pages, i2c_master_bus_handle_t&& busHandle, i2c_master_dev_handle_t&& devHandle, std::vector<uint8_t>&& commandBuffer)
-        : m_Pages{std::move(pages)}, m_I2CBusHandle(std::move(busHandle)), m_I2CHandle(std::move(devHandle)), m_CommandBuffer(std::move(commandBuffer))
-    {}
 
     Pages m_Pages;
 
@@ -170,5 +172,5 @@ private:
     // You usually want to send multiple commands at once, so all commands are saved
     // to the command buffer and sent with FlushCommandBuffer()
     // Some commands also require multiple bytes so this also makes things easier
-    std::vector<uint8_t> m_CommandBuffer;
+    CommandBuffer m_CommandBuffer;
 };
