@@ -1138,11 +1138,11 @@ esp_err_t SSD1306Driver::DrawData(uint8_t x, uint8_t y, uint8_t width, uint8_t h
             if (invertColors)
                 columnData = ~columnData;
 
-            if (heightToDraw + yOffset <= 8) // Fits in a single page
+            if (heightToDraw + yOffset <= 8) // Fits in a single column
             {
                 columnData = columnData << yOffset;
 
-                if (heightToDraw + yOffset < 8) // Doesn't span all page
+                if (heightToDraw + yOffset < 8) // Doesn't span the entire column
                 {
                     columnData = columnData << (8 - (heightToDraw + yOffset));
                     columnData = columnData >> (8 - (heightToDraw + yOffset));

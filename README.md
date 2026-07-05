@@ -107,6 +107,13 @@ extern "C" void app_main(void)
 #### Example output
 ![photo_2025-07-20_11-48-26](https://github.com/user-attachments/assets/7c136dd0-cae7-4468-9ba1-fd24505fb44e)
 
+## Image and video converter
+I also added a python script ConvertToSSD1306.py which will convert any `.gif/.mpr/.png/.jpg/.jpeg/.webp into a format you can directly display on the screen
+
+```
+python GifToSSD1306.py video.gif 128 64
+```
+
 ## All Features
 > [!TIP]  
 > For more detailed descriptions read the comments in the code.
