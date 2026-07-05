@@ -111,8 +111,31 @@ extern "C" void app_main(void)
 I also added a python script ConvertToSSD1306.py which will convert any `.gif/.mpr/.png/.jpg/.jpeg/.webp into a format you can directly display on the screen
 
 ```
-python GifToSSD1306.py video.gif 128 64
+python ConvertToSSD1306.py video.gif 128 64
 ```
+
+And then all you have to do is
+
+```
+#include "video.h"
+...
+
+int i = 0;
+while(true)
+{
+   ESP_ERROR_CHECK(driver.DrawData(0, 0, 128, 64, (uint8_t*)video + (i % videoFrameCount) * videoFrameSize, false, true));
+
+   ESP_ERROR_CHECK(driver.WriteAllPagesToRam());
+   ESP_ERROR_CHECK(driver.ClearDisplay());
+   vTaskDelay(100 / portTICK_PERIOD_MS); // whatever your framerate was
+   i++;
+}
+```
+
+https://github.com/user-attachments/assets/976bb92f-9c4e-4150-baa1-bf99fc2caaf2
+
+
+
 
 ## All Features
 > [!TIP]  
